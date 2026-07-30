@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Hermetic stand-in for the Codex CLI, used by tests/run-tests.sh.
+#
+# Real `codex exec` costs tokens, needs auth, and takes minutes — none of which
+# belongs in CI. This stub implements just enough of the surface the runtime
+# depends on: `--version`, and an `exec` that honours --output-last-message.
+#
+# Knobs (env):
+#   FAKE_CODEX_VERSION  version string to report      (default 0.145.0)
+#   FAKE_CODEX_STATUS   first line of the reply       (default "STATUS: APPROVED")
+#   FAKE_CODEX_RC       exit code for `exec`          (default 0)
+#   FAKE_CODEX_ARGLOG   if set, append argv to this file for assertions
+set -uo pipefail
+
+if [ "${1:-}" = "--version" ]; then
+  echo "codex-cli ${FAKE_CODEX_VERSION:-0.145.0}"
+  exit 0
+fi
+
+if [ -n "${FAKE_CODEX_ARGLOG:-}" ]; then
+  printf '%s\n' "$*" >> "$FAKE_CODEX_ARGLOG"
+fi
+
+# Drain stdin so the caller's write never blocks on a full pipe.
+cat > /dev/null 2>/dev/null || true
+
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--output-last-message" ]; then out="$arg"; fi
+  prev="$arg"
+done
+
+if [ -n "$out" ]; then
+  mkdir -p "$(dirname "$out")"
+  printf '%s\n\nfake-codex reply body.\n' "${FAKE_CODEX_STATUS:-STATUS: APPROVED}" > "$out"
+fi
+
+exit "${FAKE_CODEX_RC:-0}"

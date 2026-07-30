@@ -1,0 +1,170 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Read-only by default; nothing here needs write access to the repo.
+permissions:
+  contents: read
+
+# A new push makes an in-flight run for the same ref obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # 20 is the floor the bin/ wrappers enforce and the README advertises;
+        # testing only the runner default would let that claim rot untested.
+        node: [20, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: versions
+        run: |
+          bash --version | head -1
+          node --version
+
+      - name: bash -n on wrappers
+        run: |
+          bash -n plugins/adversarial-review/bin/adversarial-review
+          bash -n plugins/adversarial-review/hooks/post-exit-plan-mode
+
+      - name: bash 3.2 compatibility (macOS only)
+        if: matrix.os == 'macos-latest'
+        run: |
+          # /bin/bash on macOS is GPL2 bash 3.2.57
+          /bin/bash --version | head -1
+          /bin/bash -n plugins/adversarial-review/bin/adversarial-review
+
+      - name: node --check every runtime module
+        run: |
+          find plugins -name '*.mjs' -print0 | xargs -0 -n1 node --check
+
+      - name: runtime smoke tests
+        run: tests/run-tests.sh
+
+      - name: validate JSON manifests
+        run: |
+          python3 -c "import json; json.load(open('.claude-plugin/marketplace.json'))"
+          python3 -c "import json; json.load(open('plugins/adversarial-review/.claude-plugin/plugin.json'))"
+          python3 -c "import json; json.load(open('.agents/plugins/marketplace.json'))"
+          python3 -c "import json; json.load(open('plugins/adversarial-review/.codex-plugin/plugin.json'))"
+          python3 -c "import json; json.load(open('plugins/adversarial-review/hooks/hooks.json'))"
+
+      - name: manifests agree across hosts
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          claude = json.load(open('plugins/adversarial-review/.claude-plugin/plugin.json'))
+          codex  = json.load(open('plugins/adversarial-review/.codex-plugin/plugin.json'))
+          fail = []
+          # A version skew here is silent: each host installs from its own manifest,
+          # so the two CLIs would happily run different builds under one name.
+          for k in ("name", "version"):
+              if claude[k] != codex[k]:
+                  fail.append(f"{k} differs: claude={claude[k]!r} codex={codex[k]!r}")
+          # Codex only discovers skills when the manifest points at them.
+          if codex.get("skills") != "./skills/":
+              fail.append("codex manifest must set \"skills\": \"./skills/\"")
+          mk = json.load(open('.claude-plugin/marketplace.json'))
+          if mk['plugins'][0]['version'] != claude['version']:
+              fail.append("marketplace.json version differs from plugin.json")
+          if mk['plugins'][0]['name'] != claude['name']:
+              fail.append("marketplace.json plugin name differs from plugin.json")
+          if fail:
+              print("\n".join(fail), file=sys.stderr); sys.exit(1)
+          print("manifests agree")
+          PY
+
+      - name: documented commands match what ships
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+          # The README is the install contract. Renaming a wrapper or a skill
+          # without updating it strands every new user on the first command they
+          # type, and nothing else in CI would notice.
+          readme = pathlib.Path('README.md').read_text()
+          fail = []
+          for b in pathlib.Path('plugins/adversarial-review/bin').iterdir():
+              if b.name not in readme:
+                  fail.append(f"bin/{b.name} is never mentioned in README.md")
+          plugin = json.load(open('plugins/adversarial-review/.claude-plugin/plugin.json'))
+          mk = json.load(open('.claude-plugin/marketplace.json'))
+          selector = f"{plugin['name']}@{mk['name']}"
+          if selector not in readme:
+              fail.append(f"README.md does not document the install selector {selector}")
+          for skill in sorted(p.parent.name for p in
+                              pathlib.Path('plugins/adversarial-review/skills').rglob('SKILL.md')):
+              if skill not in readme:
+                  fail.append(f"skill '{skill}' is never mentioned in README.md")
+          if fail:
+              print("\n".join(fail), file=sys.stderr); sys.exit(1)
+          print(f"README documents {selector}, all wrappers and all skills")
+          PY
+
+      - name: validate SKILL.md frontmatter
+        run: |
+          python3 - <<'PY'
+          import sys, pathlib, re
+          fail = []
+          for p in pathlib.Path("plugins/adversarial-review/skills").rglob("SKILL.md"):
+              text = p.read_text()
+              if not text.startswith("---\n"):
+                  fail.append(f"{p}: missing leading ---")
+                  continue
+              end = text.find("\n---\n", 4)
+              if end == -1:
+                  fail.append(f"{p}: missing closing ---")
+                  continue
+              fm = text[4:end]
+              if not re.search(r"^name:\s*\S", fm, re.M):
+                  fail.append(f"{p}: missing or empty 'name'")
+              if not re.search(r"^description:\s*\S", fm, re.M):
+                  fail.append(f"{p}: missing or empty 'description'")
+              # Claude Code and Codex both key the skill on its directory name.
+              name = re.search(r"^name:\s*(\S+)", fm, re.M)
+              if name and name.group(1) != p.parent.name:
+                  fail.append(f"{p}: frontmatter name '{name.group(1)}' != directory '{p.parent.name}'")
+          if fail:
+              for f in fail:
+                  print(f, file=sys.stderr)
+              sys.exit(1)
+          print("all SKILL.md frontmatter valid")
+          PY
+
+      - name: test stubs shadow the real binaries
+        run: |
+          # A stub not named after the real CLI never shadows it, and the suite
+          # silently spends real tokens against the real binary instead.
+          for stub in codex claude; do
+            test -x "tests/bin/$stub" || { echo "tests/bin/$stub missing or not executable"; exit 1; }
+            bash -n "tests/bin/$stub"
+          done
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y shellcheck
+          # severity=error: only fail on actual bugs, not style nits
+          shellcheck --severity=error \
+            plugins/adversarial-review/bin/adversarial-review \
+            plugins/adversarial-review/hooks/post-exit-plan-mode \
+            tests/run-tests.sh \
+            tests/bin/codex \
+            tests/bin/claude

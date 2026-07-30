@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Hermetic stand-in for the Claude Code CLI, used by tests/run-tests.sh.
+#
+# Named `claude` — not `fake-claude` — because the runtime spawns `claude` by
+# name. A differently-named stub silently never shadows the real binary, and the
+# suite then spends real tokens against the real CLI while appearing hermetic.
+#
+# Implements just enough of the surface the claude backend depends on:
+# `--version`, `--help` (for the required-flag probe), and `--print` emitting the
+# `--output-format json` envelope.
+#
+# Knobs (env):
+#   FAKE_CLAUDE_VERSION   version string to report        (default 2.1.220)
+#   FAKE_CLAUDE_STATUS    first line of `result`          (default "STATUS: APPROVED")
+#   FAKE_CLAUDE_RC        process exit code               (default 0)
+#   FAKE_CLAUDE_IS_ERROR  emit is_error:true in the JSON  (default unset)
+#   FAKE_CLAUDE_HELP_OMIT space-separated flags to drop from --help output
+#   FAKE_CLAUDE_ARGLOG    if set, append argv to this file for assertions
+set -uo pipefail
+
+if [ "${1:-}" = "--version" ]; then
+  echo "${FAKE_CLAUDE_VERSION:-2.1.220} (Claude Code)"
+  exit 0
+fi
+
+if [ "${1:-}" = "--help" ]; then
+  for f in --print --output-format --append-system-prompt --permission-mode \
+           --tools --add-dir --safe-mode --no-session-persistence --disable-slash-commands \
+           --allowed-tools --model; do
+    case " ${FAKE_CLAUDE_HELP_OMIT:-} " in
+      *" $f "*) continue ;;
+    esac
+    echo "  $f  stub flag"
+  done
+  exit 0
+fi
+
+if [ -n "${FAKE_CLAUDE_ARGLOG:-}" ]; then
+  printf '%s\n' "$*" >> "$FAKE_CLAUDE_ARGLOG"
+fi
+
+# Drain stdin so the caller's write never blocks on a full pipe.
+cat > /dev/null 2>/dev/null || true
+
+status="${FAKE_CLAUDE_STATUS:-STATUS: APPROVED}"
+is_error="${FAKE_CLAUDE_IS_ERROR:-false}"
+
+# `claude --print` exits 0 even when the turn failed, so the JSON envelope — not
+# the exit code — is what the backend must key on. The stub reproduces that.
+printf '{"type":"result","subtype":"success","is_error":%s,"result":"%s\\n\\nfake-claude reply body.","session_id":"stub"}\n' \
+  "$is_error" "$status"
+
+exit "${FAKE_CLAUDE_RC:-0}"

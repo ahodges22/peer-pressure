@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Thin shim forwarding to the Node runtime. The command name is the stable
+# public surface: one `Bash(adversarial-review *)` allowlist rule covers every
+# subcommand, so the rule survives any refactor behind this script.
+#
+# Usage:
+#   adversarial-review <subcommand> [args...]
+# where <subcommand> is one of: detect, inspect-repo, new-ctx, plan-review, code-review.
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "ERROR: node is required but not found on PATH." >&2
+  echo "Install Node.js >= 20 (e.g. 'brew install node' or 'nvm install --lts')." >&2
+  exit 127
+fi
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+if [ "${NODE_MAJOR:-0}" -lt 20 ]; then
+  echo "ERROR: node $NODE_MAJOR detected; adversarial-review requires Node.js >= 20." >&2
+  echo "Upgrade node (e.g. 'nvm install --lts' or 'brew upgrade node')." >&2
+  exit 127
+fi
+
+exec node "$SCRIPT_DIR/../scripts/orchestration.mjs" "$@"

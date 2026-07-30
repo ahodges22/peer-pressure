@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# PostToolUse hook for ExitPlanMode.
+#
+# When the user exits plan mode, resolve the just-drafted plan path from the
+# session's own transcript (anchored on the fixed reminder phrase Claude Code
+# emits at plan-mode entry) and inject advisory context prompting Claude to
+# run the plan-review skill against that draft.
+#
+# Fails closed: if anything looks unsafe or unresolved, exits 0 with no output.
+
+set -euo pipefail
+
+# Read hook payload from stdin
+payload=$(cat)
+
+# jq is required; fail closed if missing
+if ! command -v jq >/dev/null 2>&1; then
+  exit 0
+fi
+
+transcript=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null)
+if [[ -z "$transcript" || ! -r "$transcript" ]]; then
+  exit 0
+fi
+
+# Grep anchored on the exact reminder phrase. Arbitrary user/tool content
+# would have to contain this prefix literally to spoof a match.
+plan_path=$( { grep -oE 'You should create your plan at [^ "]+\.md' "$transcript" 2>/dev/null || true; } \
+  | tail -1 \
+  | sed -E 's/^You should create your plan at //')
+
+# Validate: non-empty, no embedded newline, under an expected plans dir, readable.
+case "$plan_path" in
+  "" | *$'\n'*) exit 0 ;;
+  */.claude/plans/*.md) ;;
+  *) exit 0 ;;
+esac
+[[ -r "$plan_path" ]] || exit 0
+
+message="Plan mode was exited. The draft plan is at ${plan_path}.
+
+If this plan is for implementation work (not pure research), invoke the plan-review skill now with \$ARGUMENTS set to the plan file path. plan-review will read the existing draft, run the adversarial review loop against it, and print the approved final plan.
+
+Skip this if the task was research-only."
+
+# Emit additionalContext in both top-level and nested positions for
+# defensive compatibility with Claude Code hook output shapes.
+jq -n --arg msg "$message" '{
+  additionalContext: $msg,
+  hookSpecificOutput: {
+    hookEventName: "PostToolUse",
+    additionalContext: $msg
+  }
+}'
+
+exit 0

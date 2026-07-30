@@ -1,0 +1,10 @@
+{
+  "name": "adversarial-review",
+  "version": "2.0.1",
+  "description": "Adversarial plan review and code review, driven by a peer agent CLI.",
+  "author": {
+    "name": "Alex Hodges"
+  },
+  "homepage": "https://github.com/ahodges22/peer-pressure",
+  "license": "MIT"
+}

@@ -1,0 +1,37 @@
+{
+  "name": "adversarial-review",
+  "version": "2.0.1",
+  "description": "Adversarial plan review and code review, driven by a peer agent CLI.",
+  "author": {
+    "name": "Alex Hodges"
+  },
+  "homepage": "https://github.com/ahodges22/peer-pressure",
+  "repository": "https://github.com/ahodges22/peer-pressure",
+  "license": "MIT",
+  "keywords": [
+    "code-review",
+    "plan-review",
+    "adversarial",
+    "claude-code",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Peer Pressure",
+    "shortDescription": "Have the other agent CLI review your work",
+    "longDescription": "Adversarial plan review and code review. The reviewer is always the agent CLI that is not running the skill: Codex reviews Claude Code, and Claude Code reviews Codex, so the critique does not share the author's blind spots.",
+    "developerName": "Alex Hodges",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "websiteURL": "https://github.com/ahodges22/peer-pressure",
+    "brandColor": "#B4483C",
+    "defaultPrompt": [
+      "Review this plan adversarially before I build it.",
+      "Run an adversarial code review on my uncommitted changes."
+    ]
+  }
+}
