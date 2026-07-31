@@ -1,6 +1,6 @@
 {
   "name": "adversarial-review",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Adversarial plan review and code review, driven by a peer agent CLI.",
   "author": {
     "name": "Alex Hodges"
