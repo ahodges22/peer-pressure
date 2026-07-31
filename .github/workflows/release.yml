@@ -24,7 +24,7 @@ jobs:
       # and release-please updates each one through `extra-files`. The
       # "manifests agree" job in ci.yml re-checks that on the release PR, so a
       # missed field fails the PR loudly instead of shipping a version skew.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
