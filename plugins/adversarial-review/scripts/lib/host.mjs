@@ -3,7 +3,7 @@
 //
 // The whole premise of adversarial review is that the reviewer is not the author.
 // Running the host's own model against its own output preserves fresh-context
-// independence but loses model independence — the reviewer shares the author's
+// independence but loses model independence: the reviewer shares the author's
 // blind spots. So the peer is always the CLI that is *not* the host.
 
 export const HOST_CLAUDE_CODE = "claude-code";
@@ -14,7 +14,7 @@ export const HOSTS = [HOST_CLAUDE_CODE, HOST_CODEX];
 // Environment markers, verified empirically against Claude Code 2.1.x and Codex
 // 0.145.x. `CLAUDE_PLUGIN_ROOT` is hook-only, so it cannot be used here.
 // `CODEX_SANDBOX*` is set only under sandboxed modes, so it is not a reliable
-// marker either — `CODEX_THREAD_ID` is present under `danger-full-access` too.
+// marker either. `CODEX_THREAD_ID` is present under `danger-full-access` too.
 const MARKERS = {
   [HOST_CLAUDE_CODE]: "CLAUDECODE",
   [HOST_CODEX]: "CODEX_THREAD_ID"
@@ -38,7 +38,7 @@ export const HOST_ENV_OVERRIDE = "ADVERSARIAL_REVIEW_HOST";
  * Env inheritance makes marker detection ambiguous in nested setups: a Codex
  * session launched from inside Claude Code inherits CLAUDECODE, so both markers
  * are present and neither is authoritative. Guessing there would silently point
- * the review at the wrong CLI — and in the worst case at the host's own model,
+ * the review at the wrong CLI, and in the worst case at the host's own model,
  * which is exactly the failure mode this plugin exists to prevent. Fail closed
  * and make the caller say which it is.
  *

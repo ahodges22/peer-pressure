@@ -4,8 +4,12 @@ import { runSync } from "./process.mjs";
 // Secret-file exclusion policy. Mirrors the bash wrapper's patterns so the
 // allowed-file set stays consistent across iterations.
 
-// Git pathspec exclusions, kept in sync with SECRET_RE below. `:(icase)` mirrors
-// the case-insensitive matching the regex does, so `.PEM` is excluded too.
+// Git pathspec prefilter. Deliberately NOT a mirror of SECRET_RE: a pathspec
+// cannot express SECRET_ALLOWLIST_RE, so anything excluded here could never be
+// allowed back through, and `.env` is omitted for exactly that reason. Treat
+// this list as a cheap first pass only. isSecretPath is the authority, and every
+// candidate pathname must pass through it. `:(icase)` mirrors the regex's
+// case-insensitivity, so `.PEM` is excluded too.
 const SECRET_PATHSPECS = [
   ":(icase):!*.pem",
   ":(icase):!*.key",
@@ -40,12 +44,12 @@ const SECRET_PATHSPECS = [
 ];
 
 // Filename-level secret detection. NOTE: this is a filename heuristic, not a
-// content scanner — a token pasted into an ordinary source file will not be
+// content scanner: a token pasted into an ordinary source file will not be
 // caught. See findSecretFilesInWorkingTree's caveat.
 //
 // Covers: env files; key/cert archives; SSH private keys; cloud and package
 // registry credential files; kubeconfigs; Kubernetes secret manifests (both
-// `secret.yaml` and `secrets.yaml` — the singular form is the conventional
+// `secret.yaml` and `secrets.yaml`, since the singular form is the conventional
 // manifest name); Vault configs; Terraform variable files.
 const SECRET_RE = new RegExp(
   [
@@ -89,11 +93,16 @@ export function findSecretFilesInWorkingTree(root) {
   const all = new Set();
 
   // `--others` without `--exclude-standard` lists every untracked path,
-  // including those in .gitignore — gitignored .env files still surface.
-  const cached = runSync("git", ["ls-files", "--cached"], { cwd: root });
-  const others = runSync("git", ["ls-files", "--others"], { cwd: root });
-  for (const out of [cached.stdout, others.stdout]) {
-    for (const f of out.split(/\r?\n/)) if (f) all.add(f);
+  // including those in .gitignore, so gitignored .env files still surface.
+  //
+  // A scan that cannot enumerate the tree must never report "no secrets found",
+  // so an unreadable listing throws rather than contributing nothing. Every
+  // other runSync caller in this codebase guards on status; this one did not,
+  // and a null stdout crashed with a TypeError instead of a stated reason.
+  for (const args of [["ls-files", "--cached"], ["ls-files", "--others"]]) {
+    const r = runSync("git", args, { cwd: root });
+    if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed in ${root}`);
+    for (const f of (r.stdout ?? "").split(/\r?\n/)) if (f) all.add(f);
   }
 
   if (fs.existsSync(`${root}/.gitmodules`)) {
@@ -110,7 +119,8 @@ export function findSecretFilesInWorkingTree(root) {
       ],
       { cwd: root }
     );
-    for (const f of sub.stdout.split(/\r?\n/)) if (f) all.add(f);
+    if (sub.status !== 0) throw new Error(`git submodule foreach ls-files failed in ${root}`);
+    for (const f of (sub.stdout ?? "").split(/\r?\n/)) if (f) all.add(f);
   }
 
   const found = [];

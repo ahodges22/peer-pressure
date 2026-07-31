@@ -26,7 +26,7 @@ export PATH="$TESTS_DIR/bin:$PATH"   # shadows the real `codex`/`claude` so no t
 
 # Host detection reads the environment, so an unpinned suite behaves differently
 # depending on where it runs: CLAUDECODE is set when a developer runs it from
-# inside Claude Code, and NEITHER marker is set in CI — where every test would
+# inside Claude Code, and NEITHER marker is set in CI, where every test would
 # then fail with unknown_host. Pin the host for the bulk of the suite; the
 # host-detection group below overrides these deliberately, per invocation.
 unset CLAUDECODE CODEX_THREAD_ID
@@ -98,10 +98,33 @@ grep -q 'do not send a review or consume model tokens' "$ROOT_README" \
 
 if grep -Eq '^## (Safety|Troubleshooting)$' "$ROOT_README" "$PLUGIN_README"; then
   no "removed README sections returned"
-elif grep -q '—' "$ROOT_README" "$PLUGIN_README"; then
-  no "README contains an em dash"
 else
-  ok "README has no removed sections or em dashes"
+  ok "README has no removed sections"
+fi
+
+# Repo-wide, not README-only. The old guard watched two files while em dashes
+# accumulated in the review prompts, the runtime comments and this suite. The
+# pattern is built from a codepoint escape so the check cannot match its own
+# source, and python3 is already a CI dependency for the manifest checks.
+emdash_hits=$(cd "$REPO_ROOT" && python3 -c '
+import pathlib, subprocess
+EM = chr(0x2014)
+listing = subprocess.run(["git", "ls-files", "-z"], capture_output=True, text=True).stdout
+bad = []
+for f in listing.split("\0"):
+    if not f:
+        continue
+    try:
+        if EM in pathlib.Path(f).read_text(encoding="utf-8"):
+            bad.append(f)
+    except (OSError, UnicodeDecodeError):
+        continue
+print(" ".join(bad))
+')
+if [ -n "$emdash_hits" ]; then
+  no "em dash in tracked file(s): $emdash_hits"
+else
+  ok "no em dash in any tracked file"
 fi
 
 # ---------------------------------------------------------------- version floor
@@ -115,7 +138,7 @@ FAKE_CODEX_VERSION=0.145.0 cli detect | grep -q '"versionCheck": "ok"' \
   && ok "current version reports versionCheck ok" || no "versionCheck missing"
 FAKE_CODEX_VERSION="nightly-abc" cli detect | grep -q '"versionCheck": "unparsed"' \
   && ok "unparseable version allowed but flagged" || no "dev build handling wrong"
-# A well-formed plan bundle, so the version gate is what trips — not input validation.
+# A well-formed plan bundle, so the version gate is what trips, not input validation.
 printf '===== PLAN START =====\nship the thing\n===== PLAN END =====\n' > "$WORK/plan-ctx.txt"
 out=$(FAKE_CODEX_VERSION=0.100.0 cli plan-review --context-file "$WORK/plan-ctx.txt")
 echo "$out" | grep -q 'peer_too_old' && ok "review path surfaces peer_too_old" \
@@ -174,6 +197,60 @@ cli code-review --mode uncommitted --repo-context | grep -q 'secret_files_in_tre
 cli code-review --mode uncommitted --self-collect | grep -q 'requires --repo-context' \
   && ok "--self-collect requires --repo-context" || no "self-collect validation broken"
 
+# The self-collect snapshot is a list of filenames handed to a peer that then
+# reads the repo itself. A tracked `.env` used to reach it, because that side was
+# filtered by pathspecs alone and the pathspec list has no `.env` entry.
+R=$(newrepo sc); cd "$R"
+printf 'TOKEN=real\n' > .env
+printf 'TOKEN=placeholder\n' > .env.example
+git add -A; git commit -q -m seed
+printf 'TOKEN=rotated\n' > .env
+printf 'TOKEN=placeholder2\n' > .env.example
+node --input-type=module -e '
+const d = await import("'"$REPO_ROOT"'/plugins/adversarial-review/scripts/lib/diff.mjs");
+const { payload } = d.buildCodeSelfCollectPayload({ cwd: process.cwd(), mode: "uncommitted",
+  options: { includeSecrets: false } });
+if (payload.includes("- .env\n")) { console.log("tracked .env listed in snapshot"); process.exit(1); }
+if (!payload.includes("- .env.example")) { console.log("template wrongly filtered"); process.exit(1); }
+' >/dev/null 2>&1 && ok "self-collect snapshot omits a tracked .env but keeps .env.example" \
+  || no "SECRET LEAK: tracked .env reached the self-collect snapshot"
+
+# ------------------------------------------------------- binary probe failure
+group "binary detection fails safe"
+# `file` is spawned to classify untracked files. When that spawn fails (argv over
+# ARG_MAX, or `file` not installed) an unclassified file used to be treated as
+# text and read as utf8, inlining the binary into the payload as mojibake.
+R=$(newrepo bin); cd "$R"
+python3 -c "open('blob.bin','wb').write(bytes(range(256))*40)"
+printf 'plain\n' > keep.txt
+STUBS="$WORK/nofile"; mkdir -p "$STUBS"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$STUBS/file"; chmod +x "$STUBS/file"
+PATH="$STUBS:$PATH" node --input-type=module -e '
+const d = await import("'"$REPO_ROOT"'/plugins/adversarial-review/scripts/lib/diff.mjs");
+const { payload, skipped } = d.buildCodePayload({ cwd: process.cwd(), mode: "uncommitted",
+  options: { includeSecrets:false, includeLarge:false, includeBinary:false } });
+if (!skipped.some(x => x === "binary untracked: blob.bin")) { console.log("binary not skipped"); process.exit(1); }
+if (payload.includes("blob.bin")) { console.log("binary inlined anyway"); process.exit(1); }
+if (!payload.includes("keep.txt")) { console.log("text file lost"); process.exit(1); }
+' >/dev/null 2>&1 && ok "unclassifiable file is skipped as binary, text files still reviewed" \
+  || no "binary probe failure still inlines binaries as text"
+
+# The working path must not regress: with `file` available, nothing changes.
+cli code-review --mode uncommitted | grep -q 'binary untracked: blob.bin' \
+  && ok "binary is still detected normally when file(1) works" || no "normal binary detection regressed"
+
+# --------------------------------------------------------- stable error codes
+group "failure paths emit stable error codes"
+R=$(newrepo ec); cd "$R"
+# AGENTS.md pins `error` to a code the SKILLs match on. These two paths used to
+# emit free-form prose and an internal-crash label respectively.
+cli code-review --mode branch --base no-such-ref | grep -q '"error": "invalid_base"' \
+  && ok "unresolvable --base reports invalid_base" || no "invalid_base code missing"
+cli code-review --mode branch --base no-such-ref | grep -q '"detail": "merge-base not found' \
+  && ok "the human-readable reason moved to detail" || no "detail missing on invalid_base"
+cli code-review --mode uncommitted --bogus | grep -q '"error": "invalid_usage"' \
+  && ok "an unknown flag is a usage error, not an unhandled_exception" || no "bad flag still labelled a crash"
+
 # --------------------------------------------------------------- bundle parsing
 group "context bundle parsing"
 node --input-type=module -e '
@@ -221,7 +298,7 @@ cli detect              | grep -Eq '"execute"|executeConfinement' \
   && no "detect still advertises execution" || ok "detect exposes review invocation only"
 
 group "large JSON output survives the pipe"
-# The child must write to a PIPE — that is the only condition under which the
+# The child must write to a PIPE, which is the only condition under which the
 # old `process.stdout.write` + `process.exit` pair truncated at 64KB.
 cat > "$WORK/emit-child.mjs" <<EOF
 import { writeAllSync } from "$REPO_ROOT/plugins/adversarial-review/scripts/lib/io.mjs";
@@ -248,8 +325,8 @@ hcli CODEX_THREAD_ID=t1 | grep -q '"peer": "claude"' \
   && ok "Codex host is reviewed by Claude Code" || no "codex did not select claude"
 
 # Env vars are inherited, so one CLI running inside another sets both markers.
-# Guessing here could hand the review to the host's own model — the exact failure
-# adversarial review exists to prevent — so it must fail closed.
+# Guessing here could hand the review to the host's own model, the exact failure
+# adversarial review exists to prevent, so it must fail closed.
 hcli CLAUDECODE=1 CODEX_THREAD_ID=t1 | grep -q '"error": "ambiguous_host"' \
   && ok "both markers set fails closed rather than guessing" || no "nested hosts not rejected"
 hcli | grep -q '"error": "unknown_host"' \
@@ -359,6 +436,65 @@ if (classifyTransient({ rc: 0 })) bad.push("rc0 treated as failure");
 if (bad.length) { console.log(bad.join(" ")); process.exit(1); }
 ' >/dev/null 2>&1 && ok "status classification: 4 transient, 5 terminal, rc0 ignored" \
   || no "classifyTransient regression"
+
+# ---------------------------------------------------------- plan-mode hook
+group "plan-mode hook"
+# The hook shipped with no execution coverage at all: CI only linted it. Its
+# `case` gate on */.claude/plans/*.md is the only thing between a spoofed
+# transcript line and an arbitrary path being injected into Claude's context,
+# so it is worth pinning.
+# (Do not start a comment line with the linter's name: it gets parsed as a
+# directive and fails the lint.)
+HOOK="$REPO_ROOT/plugins/adversarial-review/hooks/post-exit-plan-mode"
+HW="$WORK/hook"; mkdir -p "$HW/.claude/plans"
+printf '# Plan\n' > "$HW/.claude/plans/draft.md"
+
+# The hook anchors on this exact reminder phrase, so the fixture must use it too.
+mktranscript(){ printf 'You should create your plan at %s\n' "$@" > "$HW/transcript.jsonl"; }
+runhook(){ printf '{"transcript_path":"%s"}' "$1" | "$HOOK" 2>/dev/null; }
+
+if ! command -v jq >/dev/null 2>&1; then
+  # Not a skip: the hook needs jq and degrades to silence without it, so a
+  # machine without jq cannot verify the behaviour users actually get.
+  no "jq is missing, so the plan-mode hook cannot be exercised"
+else
+  mktranscript "$HW/.claude/plans/draft.md"
+  out=$(runhook "$HW/transcript.jsonl")
+  printf '%s' "$out" | grep -q "$HW/.claude/plans/draft.md" \
+    && printf '%s' "$out" | grep -q 'hookSpecificOutput' \
+    && ok "a readable plan under .claude/plans produces advisory context" \
+    || no "hook produced no usable context for a valid plan"
+
+  # A transcript is attacker-influenced content. A path outside the plans dir
+  # must never reach the output, however the phrase got in there.
+  #
+  # The decoy has to EXIST and be readable. Pointing at a missing file made this
+  # assertion pass on the later `[[ -r ]]` check instead of the directory gate,
+  # so weakening the gate to `*.md` still went green.
+  mkdir -p "$HW/outside"; printf '# not a plan\n' > "$HW/outside/evil.md"
+  mktranscript "$HW/outside/evil.md"
+  [ -z "$(runhook "$HW/transcript.jsonl")" ] \
+    && ok "a readable plan path outside .claude/plans is refused" \
+    || no "PATH ESCAPE: hook accepted a path outside .claude/plans"
+
+  # Right directory, but nothing on disk: the readability check must still fail.
+  mktranscript "$HW/.claude/plans/ghost.md"
+  [ -z "$(runhook "$HW/transcript.jsonl")" ] \
+    && ok "a plan path that does not exist is refused" \
+    || no "hook accepted an unreadable plan path"
+
+  # The last mention wins, so a later plan supersedes an earlier one.
+  printf 'You should create your plan at %s\nYou should create your plan at %s\n' \
+    "$HW/.claude/plans/old.md" "$HW/.claude/plans/draft.md" > "$HW/transcript.jsonl"
+  runhook "$HW/transcript.jsonl" | grep -q 'draft.md' \
+    && ok "the most recent plan mention wins" || no "hook picked a stale plan path"
+
+  [ -z "$(runhook "/nonexistent/transcript.jsonl")" ] \
+    && ok "an unreadable transcript exits quietly" || no "hook emitted output without a transcript"
+
+  [ -z "$(printf 'not json' | "$HOOK" 2>/dev/null)" ] \
+    && ok "a malformed payload exits quietly" || no "hook emitted output for a malformed payload"
+fi
 
 printf '\n%s\n' "-----------------------------"
 printf 'passed: %d   failed: %d\n' "$pass" "$fail"

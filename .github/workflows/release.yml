@@ -1,0 +1,30 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+# release-please opens and updates a release PR, then tags and publishes the
+# GitHub Release when that PR merges. It needs to write both.
+permissions:
+  contents: write
+  pull-requests: write
+
+# Never cancel a release mid-flight: an interrupted run can tag without
+# publishing. Queue instead.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # The version lives in five files (version.txt plus four host manifests)
+      # and release-please updates each one through `extra-files`. The
+      # "manifests agree" job in ci.yml re-checks that on the release PR, so a
+      # missed field fails the PR loudly instead of shipping a version skew.
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -1,0 +1,21 @@
+version: 2
+
+# GitHub Actions is the ONLY dependency surface in this repo. There is no
+# package.json, no lockfile and no vendored code: the runtime is Node standard
+# library only, and the tests shell out to git, file and python3, all of which
+# come from the runner image. So npm, pip and the rest have nothing to scan, and
+# adding those ecosystems here would only produce empty runs.
+#
+# `prefix: ci` keeps Dependabot's commits conventional, which is what
+# release-please parses. Without it the bot's subjects fail the commit check.
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns:
+          - "*"

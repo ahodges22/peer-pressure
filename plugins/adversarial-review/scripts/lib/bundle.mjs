@@ -2,7 +2,7 @@
 //
 // Section markers must match a WHOLE line, and we bind to the LAST end marker
 // rather than the first. A non-greedy match against the first `===== X END =====`
-// silently truncated any section whose body quoted the marker format — a real
+// silently truncated any section whose body quoted the marker format, a real
 // case when reviewing plans about this plugin. The section's true terminator is
 // always the last such line, since an embedded example necessarily precedes it.
 export function parseBundle(text, labels) {

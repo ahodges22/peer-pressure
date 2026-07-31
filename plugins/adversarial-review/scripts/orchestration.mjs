@@ -62,7 +62,7 @@ function usage() {
     "",
     `Global: --host <${HOSTS.join("|")}> overrides host auto-detection (also ADVERSARIAL_REVIEW_HOST).`,
     "The reviewer is always the agent CLI that is NOT the host: Claude Code -> Codex, Codex -> Claude Code.",
-    "Run `detect` first — it reports the host, the peer, and the exact command prefix to use for every later call."
+    "Run `detect` first: it reports the host, the peer, and the exact command prefix to use for every later call."
   ].join("\n");
 }
 
@@ -83,7 +83,7 @@ function readFileIf(p) {
 
 // The host decides the peer, so a host we cannot identify means we cannot pick a
 // reviewer. Guessing risks handing the review to the host's own model, which
-// silently defeats the point of adversarial review — fail closed instead.
+// silently defeats the point of adversarial review, so fail closed instead.
 function requireHost() {
   const h = detectHost({ override: HOST_OVERRIDE });
   if (!h.ok) {
@@ -99,7 +99,7 @@ function requireHost() {
   return h;
 }
 
-// The peer must be installed AND new enough — an old CLI rejects the flags the
+// The peer must be installed AND new enough. An old CLI rejects the flags the
 // backend emits and would otherwise fail as an opaque `peer_failed`.
 function requirePeer(host) {
   const peer = peerFor(host);
@@ -303,13 +303,25 @@ function cmdCodeReview(argv) {
   // security boundary either. Refuse if any secret-bearing files exist in
   // tree, unless the user has explicitly opted in via --include-secrets.
   if (repoContext && !values["include-secrets"]) {
-    const secretFiles = findSecretFilesInWorkingTree(root);
+    let secretFiles;
+    try {
+      secretFiles = findSecretFilesInWorkingTree(root);
+    } catch (err) {
+      // Fail closed. An incomplete scan reads identically to a clean one, and
+      // this is the gate that decides whether the peer gets the working tree.
+      emit({
+        ok: false,
+        error: "secret_preflight_failed",
+        detail: err?.message ?? String(err),
+        hint: "The secret preflight could not enumerate the working tree, so it cannot certify that no secret-bearing files exist. Re-run without --repo-context, or with --include-secrets to skip the check deliberately."
+      }, 6);
+    }
     if (secretFiles.length) {
       emit({
         ok: false,
         error: "secret_files_in_tree",
         files: secretFiles,
-        hint: "--repo-context grants Codex read access to the working tree, but secret-bearing files exist in this repo. The Codex CLI read-only sandbox does not enforce path-scoped read restrictions. Resolve by removing/relocating these files, re-running without --repo-context, or passing --include-secrets to opt in. NOTE: this check matches filenames only — it cannot detect credentials embedded in ordinary source or config files, and the Codex sandbox can read paths outside this repo (e.g. ~/.ssh, ~/.aws) regardless of this result."
+        hint: "--repo-context grants Codex read access to the working tree, but secret-bearing files exist in this repo. The Codex CLI read-only sandbox does not enforce path-scoped read restrictions. Resolve by removing/relocating these files, re-running without --repo-context, or passing --include-secrets to opt in. NOTE: this check matches filenames only, and it cannot detect credentials embedded in ordinary source or config files, and the Codex sandbox can read paths outside this repo (e.g. ~/.ssh, ~/.aws) regardless of this result."
       }, 6);
     }
   }
@@ -347,7 +359,14 @@ function cmdCodeReview(argv) {
     payload = built.payload;
     skipped = built.skipped;
   } catch (err) {
-    emit({ ok: false, error: err.message }, 3);
+    // `error` is the stable code the SKILLs match on, so the reason text belongs
+    // in `detail`. Emitting err.message as the code put free-form prose where a
+    // documented code was promised.
+    emit({
+      ok: false,
+      error: err?.code ?? "payload_build_failed",
+      detail: err?.message ?? String(err)
+    }, 3);
   }
 
   // Fail closed on large-file skips so the caller sees them before Codex runs
@@ -408,8 +427,15 @@ try {
   dispatch(sub, rest);
 } catch (err) {
   // parseArgs throws on unknown/malformed flags, and fs calls can throw for
-  // reasons we have not enumerated. Either way the caller gets JSON.
-  emit({ ok: false, error: "unhandled_exception", detail: err?.message ?? String(err) }, 1);
+  // reasons we have not enumerated. Either way the caller gets JSON. A bad flag
+  // is a usage error, not a crash, so it must not be labelled as one. Every
+  // ERR_PARSE_ARGS_* code means the caller mis-spelled the invocation.
+  const usageError = typeof err?.code === "string" && err.code.startsWith("ERR_PARSE_ARGS_");
+  emit({
+    ok: false,
+    error: usageError ? "invalid_usage" : "unhandled_exception",
+    detail: err?.message ?? String(err)
+  }, 1);
 }
 
 function dispatch(sub, rest) {

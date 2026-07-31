@@ -10,7 +10,7 @@
   <rect width="200" height="200" rx="44" fill="url(#pp-bg)"/>
 
   <!-- Two peers closing in from opposite sides. The gap either side of the centre
-       is what makes this read as pressure rather than as an X (a close icon) —
+       is what makes this read as pressure rather than as an X (a close icon), so
        keep it. Distinct colours because the two reviewers are deliberately
        different models, never the same one. -->
   <path d="M40 58 L74 100 L40 142" fill="none" stroke="#E8815F"

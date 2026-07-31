@@ -170,7 +170,7 @@ Per iteration that's at most **one Write + one Bash call**. Run with a 600s time
 
 The response is JSON: `{ ok, status, output, skipped }`. Parse `status` directly. `skipped` is the list of files excluded for secrets/binary/size reasons - surface any entries to the user.
 
-If `ok: false`, the JSON contains an `error` field (`peer_unavailable`, `peer_too_old`, `peer_failed`, `missing_status_line`, `payload_too_large`, `large_files_skipped`).
+If `ok: false`, the JSON contains an `error` field (`peer_unavailable`, `peer_too_old`, `peer_failed`, `missing_status_line`, `payload_too_large`, `large_files_skipped`, `secret_files_in_tree`, `secret_preflight_failed`, `invalid_base`, `invalid_usage`, `payload_build_failed`). A human-readable reason accompanies it in `detail` where one applies. `invalid_base` means the `--base` ref has no merge-base with HEAD: ask the user for a valid ref rather than retrying. `invalid_usage` means the command line was malformed: re-read the allowed invocations above, do not improvise a flag.
 
 **Single retry for transient provider failures only:** if the failed review JSON also contains:
 

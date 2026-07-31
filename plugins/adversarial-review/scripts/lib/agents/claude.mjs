@@ -48,7 +48,7 @@ export const agent = {
       minVersion: MIN_CLAUDE_VERSION,
       notInstalledHints: NOT_INSTALLED_HINTS,
       tooOldHints: (version) => [
-        `Claude Code CLI ${version} is too old — adversarial-review requires >= ${MIN_CLAUDE_VERSION}.`,
+        `Claude Code CLI ${version} is too old: adversarial-review requires >= ${MIN_CLAUDE_VERSION}.`,
         "Upgrade: `npm install -g @anthropic-ai/claude-code@latest`",
         "Then re-run detect to confirm."
       ]
@@ -124,7 +124,7 @@ export const agent = {
     let rc = r.status ?? -1;
     let output = stdout;
 
-    // `claude --print` exits 0 even when the turn failed — an API 5xx comes back
+    // `claude --print` exits 0 even when the turn failed. An API 5xx comes back
     // as rc 0, subtype "success", and the error text in `result`, with `is_error`
     // as the only reliable signal. Trusting the exit code alone would report a
     // server error as a completed review.

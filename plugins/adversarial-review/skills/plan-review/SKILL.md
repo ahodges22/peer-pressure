@@ -148,7 +148,7 @@ The response is JSON:
 
 Parse the `status` field directly. Do not re-parse the `output` string for the status.
 
-If `ok: false`, the JSON contains an `error` field (`peer_unavailable`, `peer_too_old`, `peer_failed`, `missing_status_line`, `payload_too_large`).
+If `ok: false`, the JSON contains an `error` field (`peer_unavailable`, `peer_too_old`, `peer_failed`, `missing_status_line`, `payload_too_large`, `invalid_usage`). A human-readable reason accompanies it in `detail` where one applies. `invalid_usage` means the command line was malformed: re-read the allowed invocations above, do not improvise a flag.
 **Single retry for transient provider failures only:** if the failed review JSON also contains:
 
 ```json

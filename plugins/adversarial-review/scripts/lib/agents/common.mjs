@@ -30,8 +30,8 @@ export function compareSemver(a, b) {
 /**
  * `<command> --version` plus a minimum-version floor.
  *
- * An unparseable version string means a nightly or dev build. Allow it — failing
- * closed would block prereleases — but report that the floor was not actually
+ * An unparseable version string means a nightly or dev build. Allow it, because failing
+ * closed would block prereleases, but report that the floor was not actually
  * enforced so the caller can say so rather than implying a check that never ran.
  */
 export function detectVersion({ command, minVersion, notInstalledHints, tooOldHints }) {
