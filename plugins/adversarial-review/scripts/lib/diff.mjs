@@ -9,11 +9,20 @@ function scopeArgs(scopePaths) {
   return scopePaths.length ? scopePaths : ["."];
 }
 
+// Payload construction failures carry a stable code, because the caller emits
+// `error` as the contract field the SKILLs match on. Without one, the message
+// text became the error code and no documented code matched.
+function payloadError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
 // Batch-resolve sizes for `<ref>:<file>` specs via a single `git cat-file --batch-check`.
 // Returns Map<file, size>. Missing/deleted entries are omitted.
 //
 // `%(rest)` is empty for rev-parse specs (as opposed to bare SHAs), so we associate
-// output lines with input files by position — one output line per input line.
+// output lines with input files by position: one output line per input line.
 function batchCatFileSizes(cwd, sizeRef, files) {
   if (!files.length) return new Map();
   const input = files.map((f) => `${sizeRef}:${f}`).join("\n") + "\n";
@@ -30,22 +39,78 @@ function batchCatFileSizes(cwd, sizeRef, files) {
   return sizes;
 }
 
-// Batch-classify files as binary via a single `file --mime` call.
-// Returns Set<file> containing binary entries.
+// One `file --mime` invocation per ~64KB of argv, which stays under ARG_MAX on
+// every supported platform. Passing the whole untracked set at once made the
+// spawn fail with E2BIG on large working trees.
+const FILE_ARGV_BUDGET = 64 * 1024;
+
+function chunkByArgvBytes(files, budget) {
+  const chunks = [];
+  let current = [];
+  let bytes = 0;
+  for (const f of files) {
+    const n = Buffer.byteLength(f, "utf8") + 1;
+    if (current.length && bytes + n > budget) {
+      chunks.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(f);
+    bytes += n;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
+}
+
+// Fallback for files `file` could not classify. A NUL byte in the head of the
+// file is the same signal `file` uses to reach charset=binary, and it costs no
+// subprocess. Unreadable counts as binary: refusing to inline is the safe side.
+function looksBinary(cwd, file) {
+  let fd;
+  try {
+    fd = fs.openSync(`${cwd}/${file}`, "r");
+    const buf = Buffer.alloc(8192);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    return buf.subarray(0, n).includes(0);
+  } catch {
+    return true;
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
+  }
+}
+
+// Batch-classify files as binary via `file --mime`.
+// Returns { binary: Set<file>, unknown: Set<file> }.
+//
+// A file the probe could not classify lands in `unknown`, NOT in "not binary".
+// Treating a failed probe as text let appendUntracked read the file as utf8 and
+// inline the mojibake into the payload. That is what happened whenever the
+// spawn failed, either from an oversized argv or from `file` not being
+// installed at all.
 function batchDetectBinary(cwd, files) {
   const binary = new Set();
-  if (!files.length) return binary;
-  const r = runSync("file", ["--mime", "--", ...files], { cwd });
-  if (r.status !== 0) return binary;
-  for (const line of r.stdout.split(/\r?\n/)) {
-    if (!line) continue;
-    // Format: "<file>: <mime-type>; charset=<x>"
-    const idx = line.lastIndexOf(":");
-    if (idx === -1) continue;
-    const file = line.slice(0, idx);
-    if (/charset=binary/.test(line)) binary.add(file);
+  const unknown = new Set();
+  if (!files.length) return { binary, unknown };
+
+  for (const chunk of chunkByArgvBytes(files, FILE_ARGV_BUDGET)) {
+    const r = runSync("file", ["--mime", "--", ...chunk], { cwd });
+    if (r.status !== 0) {
+      for (const f of chunk) unknown.add(f);
+      continue;
+    }
+    const classified = new Set();
+    for (const line of (r.stdout ?? "").split(/\r?\n/)) {
+      if (!line) continue;
+      // Format: "<file>: <mime-type>; charset=<x>"
+      const idx = line.lastIndexOf(":");
+      if (idx === -1) continue;
+      const file = line.slice(0, idx);
+      classified.add(file);
+      if (/charset=binary/.test(line)) binary.add(file);
+    }
+    for (const f of chunk) if (!classified.has(f)) unknown.add(f);
   }
-  return binary;
+  return { binary, unknown };
 }
 
 // Size of the file as it currently sits in the working tree, or 0 if absent
@@ -59,8 +124,8 @@ function worktreeSize(cwd, file) {
   }
 }
 
-// Plain `--numstat` collapses a rename into ONE formatted field —
-// `cfg/{.env.example => .env}` — which is neither real pathname. That string
+// Plain `--numstat` collapses a rename into ONE formatted field,
+// `cfg/{.env.example => .env}`, which is neither real pathname. That string
 // matches no secret pattern, so renaming an allowlisted template onto a real
 // secret path smuggled its contents straight into the payload. It also made
 // every size lookup miss, defaulting the file to 0 bytes.
@@ -124,7 +189,7 @@ function trackedExclusions({ cwd, diffArgs, paths, scopePaths, sizeRef, options,
     if (!options.includeLarge) {
       // The payload carries BOTH sides of the diff, so the cap must consider
       // whichever is bigger. Sizing only the base blob let a file that was 6
-      // bytes at HEAD and is now 200KB in the worktree sail past the cap — the
+      // bytes at HEAD and is now 200KB in the worktree sail past the cap, the
       // exact case the guard exists to catch. `--cached` diffs end at the index
       // blob, which `sizeRef` already measures, so they skip the stat.
       const baseSize = sizes.get(file) ?? 0;
@@ -175,11 +240,11 @@ function appendUntracked({ cwd, files, options, skippedLog }) {
     candidates.push({ file: f, size: stat.size });
   }
 
-  const binaryFiles = batchDetectBinary(cwd, candidates.map((c) => c.file));
+  const { binary, unknown } = batchDetectBinary(cwd, candidates.map((c) => c.file));
 
   const parts = [];
   for (const { file, size } of candidates) {
-    if (binaryFiles.has(file)) {
+    if (binary.has(file) || (unknown.has(file) && looksBinary(cwd, file))) {
       if (options.includeBinary) {
         const r = runSync("git", ["diff", "--no-index", "--binary", "/dev/null", file], { cwd });
         if (r.stdout) parts.push(r.stdout);
@@ -254,11 +319,11 @@ export function buildCodePayload({
     parts.push(emitTrackedDiff({ ...shared, diffArgs: ["--cached"], sizeRef: ":0" }));
   } else if (mode === "branch") {
     const mb = mergeBase(cwd, base);
-    if (!mb) throw new Error(`merge-base not found for '${base}'`);
+    if (!mb) throw payloadError("invalid_base", `merge-base not found for '${base}'`);
     parts.push(emitTrackedDiff({ ...shared, diffArgs: [mb], sizeRef: mb, newSideIsWorktree: true }));
     parts.push(appendUntracked({ cwd, files: untrackedFilesInScope({ cwd, scopePaths }), options, skippedLog }));
   } else {
-    throw new Error(`unknown mode '${mode}'`);
+    throw payloadError("invalid_mode", `unknown mode '${mode}'`);
   }
 
   parts.push("===== CHANGES END =====");
@@ -268,13 +333,19 @@ export function buildCodePayload({
   return { payload: parts.filter(Boolean).join("\n") + "\n", skipped: [...new Set(skippedLog)] };
 }
 
-function changedFilenamesForMode({ cwd, mode, base, scopePaths, secretExcludes }) {
+function changedFilenamesForMode({ cwd, mode, base, scopePaths, secretExcludes, options }) {
   const scope = scopeArgs(scopePaths);
   const args = (diffArgs) => ["diff", "--name-only", ...diffArgs, "--", ...scope, ...secretExcludes];
   const out = new Set();
 
+  // The pathspecs are a coarse prefilter and cannot express the template
+  // allowlist, so they do not cover every SECRET_RE pattern. isSecretPath is the
+  // authority: run EVERY name through it, tracked and untracked alike. Filtering
+  // only the untracked side let a tracked `.env` into the snapshot, and
+  // hardcoding the option there ignored the caller's --include-secrets stance.
+  const add = (f) => { if (f && !isSecretPath(f, options)) out.add(f); };
   const collect = (text) => {
-    for (const line of text.split(/\r?\n/)) if (line) out.add(line);
+    for (const line of (text ?? "").split(/\r?\n/)) add(line);
   };
 
   if (mode === "uncommitted") {
@@ -284,20 +355,16 @@ function changedFilenamesForMode({ cwd, mode, base, scopePaths, secretExcludes }
       collect(runSync("git", args(["--cached"]), { cwd }).stdout);
       collect(runSync("git", args([]), { cwd }).stdout);
     }
-    for (const f of untrackedFilesInScope({ cwd, scopePaths })) {
-      if (!isSecretPath(f, { includeSecrets: false })) out.add(f);
-    }
+    for (const f of untrackedFilesInScope({ cwd, scopePaths })) add(f);
   } else if (mode === "staged") {
     collect(runSync("git", args(["--cached"]), { cwd }).stdout);
   } else if (mode === "branch") {
     const mb = mergeBase(cwd, base);
-    if (!mb) throw new Error(`merge-base not found for '${base}'`);
+    if (!mb) throw payloadError("invalid_base", `merge-base not found for '${base}'`);
     collect(runSync("git", args([mb]), { cwd }).stdout);
-    for (const f of untrackedFilesInScope({ cwd, scopePaths })) {
-      if (!isSecretPath(f, { includeSecrets: false })) out.add(f);
-    }
+    for (const f of untrackedFilesInScope({ cwd, scopePaths })) add(f);
   } else {
-    throw new Error(`unknown mode '${mode}'`);
+    throw payloadError("invalid_mode", `unknown mode '${mode}'`);
   }
 
   return [...out].sort();
@@ -319,7 +386,7 @@ export function buildCodeSelfCollectPayload({
   options = { includeSecrets: false }
 }) {
   const secretExcludes = secretPathspecs(options);
-  const files = changedFilenamesForMode({ cwd, mode, base, scopePaths, secretExcludes });
+  const files = changedFilenamesForMode({ cwd, mode, base, scopePaths, secretExcludes, options });
 
   const lines = ["===== CHANGES START ====="];
   lines.push("Compact review target for repo-backed code review.");
@@ -332,13 +399,13 @@ export function buildCodeSelfCollectPayload({
     lines.push("Inspect the repository directly. Review staged changes only.");
   } else if (mode === "branch") {
     const mb = mergeBase(cwd, base);
-    if (!mb) throw new Error(`merge-base not found for '${base}'`);
+    if (!mb) throw payloadError("invalid_base", `merge-base not found for '${base}'`);
     lines.push("Mode: branch comparison");
     lines.push(`Base ref: ${base}`);
     lines.push(`Merge-base: ${mb}`);
     lines.push("Inspect the repository directly. Review current changes relative to the merge-base and reviewable untracked files in scope.");
   } else {
-    throw new Error(`unknown mode '${mode}'`);
+    throw payloadError("invalid_mode", `unknown mode '${mode}'`);
   }
 
   lines.push(`Scope: ${scopePaths.length ? scopePaths.join(" ") : "all changed files"}`);
