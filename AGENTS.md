@@ -274,6 +274,35 @@ release PR if they diverge, so that skew cannot reach `main`.
 release-managed. If Codex ever starts reading one from there, add it to both the
 `extra-files` list and the CI check together.
 
+### Release PR checks and auto-merge need a PAT
+
+GitHub never triggers workflows on events created by a workflow's default
+`GITHUB_TOKEN`. That single rule has two consequences here:
+
+- A release PR opened with the default token gets **no** `pull_request` checks.
+  `ci.yml` simply does not run on it. The `verify-release-pr` job in
+  `release.yml` exists as the backstop: it checks out the release branch in the
+  same run and verifies the six version fields and the test suite there.
+- A merge performed with the default token would not trigger `release.yml`, so
+  the tag and GitHub Release would never be created. This is why the auto-merge
+  job refuses to run without a PAT rather than falling back.
+
+To get full CI on release PRs and auto-merge, once:
+
+1. Create a fine-grained PAT scoped to this repository with `contents: write`
+   and `pull-requests: write`.
+2. Add it as an Actions secret named `RELEASE_TOKEN`.
+3. Enable "Allow auto-merge" in the repository settings.
+4. Add branch protection on `main` requiring the CI checks (public repo only).
+   Auto-merge only arms when a required check blocks the merge; without branch
+   protection the `gh pr merge --auto` call reports that and the PR stays
+   manual.
+
+With the secret in place, release-please opens its PRs under the PAT identity,
+`ci.yml` runs on them like any other PR, and the `automerge-release-pr` job
+flags them to merge when green. Without it, everything still works; release PRs
+are just verified by `verify-release-pr` and merged by hand.
+
 ### Do not use `claude plugin tag`
 
 It produces `adversarial-review--v<version>` tags, which is a different scheme

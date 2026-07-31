@@ -19,12 +19,78 @@ concurrency:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      pr: ${{ steps.release.outputs.pr }}
     steps:
-      # The version lives in five files (version.txt plus four host manifests)
-      # and release-please updates each one through `extra-files`. The
-      # "manifests agree" job in ci.yml re-checks that on the release PR, so a
-      # missed field fails the PR loudly instead of shipping a version skew.
+      # With RELEASE_TOKEN (a fine-grained PAT) the release PR is created by a
+      # real identity, so ci.yml runs on it and merging it triggers this
+      # workflow to tag. With only GITHUB_TOKEN both of those are suppressed:
+      # GitHub never triggers workflows on events the default token creates.
       - uses: googleapis/release-please-action@v5
+        id: release
         with:
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Backstop for the no-PAT case, where the release PR gets no pull_request
+  # checks at all and the six-way version-agreement gate in ci.yml would be
+  # dead on exactly the PRs it exists to guard. Verify the release branch here,
+  # in the run that just created or updated it. Redundant but harmless once a
+  # PAT is configured.
+  verify-release-pr:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.pr }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
+
+      - name: all six version fields agree
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+          claude = json.load(open('plugins/adversarial-review/.claude-plugin/plugin.json'))
+          codex  = json.load(open('plugins/adversarial-review/.codex-plugin/plugin.json'))
+          mk     = json.load(open('.claude-plugin/marketplace.json'))
+          versions = {
+              'version.txt': pathlib.Path('version.txt').read_text().strip(),
+              '.release-please-manifest.json': json.load(open('.release-please-manifest.json'))['.'],
+              'marketplace.json:metadata': mk['metadata']['version'],
+              'marketplace.json:plugins[0]': mk['plugins'][0]['version'],
+              '.claude-plugin/plugin.json': claude['version'],
+              '.codex-plugin/plugin.json': codex['version'],
+          }
+          if len(set(versions.values())) != 1:
+              print("version skew on the release branch: " +
+                    ", ".join(f"{k}={v}" for k, v in versions.items()), file=sys.stderr)
+              sys.exit(1)
+          print(f"release branch agrees at {versions['version.txt']}")
+          PY
+
+      - name: runtime smoke tests
+        run: tests/run-tests.sh
+
+  # Opt-in auto-merge: flag the release PR to merge itself once its required
+  # checks pass. Guarded on the PAT for two reasons: GITHUB_TOKEN cannot be
+  # used here (its merge push would not trigger this workflow, so the tag and
+  # GitHub Release would never be created), and auto-merge only arms when
+  # branch protection makes required checks block the merge. Without the PAT
+  # this job is skipped and release PRs stay manual-merge.
+  automerge-release-pr:
+    needs: [release-please, verify-release-pr]
+    if: ${{ needs.release-please.outputs.pr }}
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+    steps:
+      - name: enable auto-merge
+        if: env.RELEASE_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          PR_NUMBER: ${{ fromJSON(needs.release-please.outputs.pr).number }}
+        run: |
+          gh pr merge --auto --merge \
+            --repo "$GITHUB_REPOSITORY" "$PR_NUMBER" \
+            || echo "auto-merge not armed (branch protection with required checks is a prerequisite)"
