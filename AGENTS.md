@@ -33,9 +33,9 @@ codex plugin remove adversarial-review@peer-pressure
 codex plugin add adversarial-review@peer-pressure
 ```
 
-If `plugin.json`'s `version` didn't bump, the cache may not refresh - bump it
-when shipping anything users would notice (new flag, new error code, new
-SKILL behavior).
+If `plugin.json`'s `version` didn't bump, the cache may not refresh. Do **not**
+bump it by hand: release-please owns every version field in this repo. See
+[Releasing](#releasing).
 
 For faster iteration without the round-trip, run the Node entry point
 directly against your working copy:
@@ -141,6 +141,15 @@ Conventions:
   are how optional blocks (e.g. `{{REPO_COLLECTION_RULES}}`) collapse cleanly.
 - **Errors are JSON, not text.** All failure paths call `emit({ ok: false,
   error: "<stable_code>", ... }, exitCode)`. SKILLs parse `error` directly.
+- **The plan-mode hook needs `jq`,** and it is the only component that does.
+  Without `jq` it exits 0 with no output, so the user simply never gets the
+  plan-review suggestion and nothing indicates why. That degradation is
+  deliberate (a hook must not break the host) but it does mean a missing `jq`
+  is invisible. The hook's `case` gate on `*/.claude/plans/*.md` is the only
+  barrier between a spoofed transcript line and an arbitrary path reaching
+  Claude's context; `tests/run-tests.sh` pins it with a readable decoy file
+  outside the plans directory, because a decoy that does not exist passes on
+  the later readability check no matter how broken the gate is.
 - **Tests live in `tests/run-tests.sh`.** Run them before shipping:
 
   ```bash
@@ -211,6 +220,73 @@ node ... detect --host codex
 node ... inspect-repo
 # Expect: { inWorkTree: true|false, hasDirty, ahead, defaultBranch, status, hasSubmodules }
 ```
+
+## Releasing
+
+Releases are automated by [release-please](https://github.com/googleapis/release-please)
+(`.github/workflows/release.yml`). Nobody edits a version by hand.
+
+### Commit messages are the release input
+
+Every subject that lands on `main` must follow
+[Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>[optional scope][!]: <description>
+```
+
+Allowed types: `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`,
+`refactor`, `revert`, `style`, `test`. `fix:` produces a patch bump, `feat:` a
+minor bump, and a `!` suffix or a `BREAKING CHANGE:` footer produces a major
+bump. Anything else contributes no bump at all.
+
+That last point is the trap worth internalising. A non-conventional subject does
+not fail at merge time, it just silently fails to trigger a release, so a fix
+sits shipped-but-unreleased with nothing to indicate why. The
+`commit-convention` job in `ci.yml` is what makes it fail loudly instead. It
+checks the PR title **and** every individual commit, because all three merge
+methods are enabled on this repo: squash uses the PR title, merge and rebase use
+the commits.
+
+### What a release does
+
+1. Push to `main`. release-please opens or updates a release PR titled
+   `chore(main): release <version>`.
+2. That PR bumps the version everywhere and regenerates `CHANGELOG.md`.
+3. Merge it. release-please tags `v<version>` and publishes a GitHub Release.
+
+### The version lives in six places
+
+`version.txt` is release-please's anchor. The other five are updated through
+`extra-files` in `release-please-config.json`:
+
+- `.release-please-manifest.json` (`.`)
+- `.claude-plugin/marketplace.json` (`metadata.version` and `plugins[0].version`)
+- `plugins/adversarial-review/.claude-plugin/plugin.json` (`version`)
+- `plugins/adversarial-review/.codex-plugin/plugin.json` (`version`)
+
+A jsonpath that stops matching would bump some files and not others, which is
+exactly the silent skew each host's cache would then serve under one name. The
+`manifests agree across hosts` job in `ci.yml` compares all six and fails the
+release PR if they diverge, so that skew cannot reach `main`.
+
+`.agents/plugins/marketplace.json` carries no version field and is therefore not
+release-managed. If Codex ever starts reading one from there, add it to both the
+`extra-files` list and the CI check together.
+
+### Do not use `claude plugin tag`
+
+It produces `adversarial-review--v<version>` tags, which is a different scheme
+from the `v<version>` tags release-please creates. Two tag schemes on one repo
+make "which tag is the release" unanswerable. release-please owns tagging.
+
+### Dependencies
+
+There is nothing to update but the GitHub Actions pins: no `package.json`, no
+lockfile, no vendored code, and the runtime is Node standard library only.
+`.github/dependabot.yml` therefore configures the `github-actions` ecosystem and
+nothing else, grouped into one weekly PR with a `ci` prefix so the bot's own
+subjects stay conventional.
 
 ## Gotcha: a global `lib/` gitignore
 
