@@ -6,14 +6,14 @@
     "name": "Alex Hodges"
   },
   "metadata": {
-    "version": "2.0.1"
+    "version": "2.0.2"
   },
   "plugins": [
     {
       "name": "adversarial-review",
       "source": "./plugins/adversarial-review",
       "description": "Adversarial plan review and code review. The reviewer is always the agent CLI that is not the host: Codex reviews Claude Code, and Claude Code reviews Codex.",
-      "version": "2.0.1",
+      "version": "2.0.2",
       "author": {
         "name": "Alex Hodges"
       },
