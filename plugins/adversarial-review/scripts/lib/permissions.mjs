@@ -10,7 +10,7 @@ import path from "node:path";
 
 // Claude Code checks file permissions against `Edit(path)` and `Read(path)`
 // rules ONLY. A `Write(path)` rule is accepted, never consulted, and warned
-// about at startup — `Edit` rules cover all file-editing tools including Write.
+// about at startup. `Edit` rules cover all file-editing tools including Write.
 // This plugin recommended the `Write(...)` form until it was found to be inert
 // as of Claude Code 2.1.210; legacy rules are detected below so users can be
 // told to migrate rather than silently getting prompts they thought they had
@@ -33,7 +33,7 @@ export function checkTmpWritePreapproved() {
   const dir = tmpdir.replace(/\/+$/, "");
   const accepted = allowPatterns(dir);
   const legacy = legacyPatterns(dir);
-  // Recommend the `**` form — it covers every file under tmpdir.
+  // Recommend the `**` form: it covers every file under tmpdir.
   const expected_rule = accepted[1];
 
   try {
@@ -53,13 +53,13 @@ export function checkTmpWritePreapproved() {
             legacy_write_rules: legacyRules,
             legacy_hint:
               `Found ${legacyRules.join(", ")} in permissions.allow. Claude Code never ` +
-              `consults Write(path) rules — only Edit(path) and Read(path). Replace it ` +
+              `consults Write(path) rules, only Edit(path) and Read(path). Replace it ` +
               `with ${expected_rule}.`
           }
         : {})
     };
   } catch {
-    // ENOENT, parse error, or perms — caller treats as "not pre-approved".
+    // ENOENT, parse error, or perms. Caller treats as "not pre-approved".
     return { tmp_write_preapproved: false, checked, expected_rule, tmpdir };
   }
 }

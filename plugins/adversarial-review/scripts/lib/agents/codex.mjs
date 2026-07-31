@@ -28,7 +28,7 @@ export const agent = {
       minVersion: MIN_CODEX_VERSION,
       notInstalledHints: NOT_INSTALLED_HINTS,
       tooOldHints: (version) => [
-        `Codex CLI ${version} is too old — adversarial-review requires >= ${MIN_CODEX_VERSION}.`,
+        `Codex CLI ${version} is too old: adversarial-review requires >= ${MIN_CODEX_VERSION}.`,
         "Upgrade: `npm install -g @openai/codex@latest` (or `brew upgrade codex` on macOS)",
         "Then re-run detect to confirm."
       ]

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Hermetic stand-in for the Codex CLI, used by tests/run-tests.sh.
 #
-# Real `codex exec` costs tokens, needs auth, and takes minutes — none of which
+# Real `codex exec` costs tokens, needs auth, and takes minutes, none of which
 # belongs in CI. This stub implements just enough of the surface the runtime
 # depends on: `--version`, and an `exec` that honours --output-last-message.
 #

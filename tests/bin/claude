@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Hermetic stand-in for the Claude Code CLI, used by tests/run-tests.sh.
 #
-# Named `claude` — not `fake-claude` — because the runtime spawns `claude` by
+# Named `claude`, not `fake-claude`, because the runtime spawns `claude` by
 # name. A differently-named stub silently never shadows the real binary, and the
 # suite then spends real tokens against the real CLI while appearing hermetic.
 #
@@ -45,8 +45,8 @@ cat > /dev/null 2>/dev/null || true
 status="${FAKE_CLAUDE_STATUS:-STATUS: APPROVED}"
 is_error="${FAKE_CLAUDE_IS_ERROR:-false}"
 
-# `claude --print` exits 0 even when the turn failed, so the JSON envelope — not
-# the exit code — is what the backend must key on. The stub reproduces that.
+# `claude --print` exits 0 even when the turn failed, so the JSON envelope, not
+# the exit code, is what the backend must key on. The stub reproduces that.
 printf '{"type":"result","subtype":"success","is_error":%s,"result":"%s\\n\\nfake-claude reply body.","session_id":"stub"}\n' \
   "$is_error" "$status"
 
