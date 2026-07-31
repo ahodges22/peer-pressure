@@ -67,5 +67,3 @@ Findings are merge-blocking only. Out-of-scope suggestions get rejected by defau
 ## License
 
 MIT - see [LICENSE](./LICENSE).
-
-Architecture, dev loop and tests: [AGENTS.md](./AGENTS.md).
