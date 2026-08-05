@@ -74,6 +74,60 @@ do
     || ok "$name has no unconditional AskUserQuestion dependency"
 done
 
+group "consult-peer skill contract"
+CONSULT_SKILL="$REPO_ROOT/plugins/adversarial-review/skills/consult-peer/SKILL.md"
+
+if [ -f "$CONSULT_SKILL" ] \
+  && grep -q '^name: consult-peer$' "$CONSULT_SKILL" \
+  && grep -q 'explicitly asks\|explicit request' "$CONSULT_SKILL" \
+  && grep -q 'ordinary brainstorming' "$CONSULT_SKILL"; then
+  ok "consult-peer has a narrow explicit-request trigger"
+else
+  no "consult-peer trigger contract is missing"
+fi
+
+if [ -f "$CONSULT_SKILL" ] \
+  && grep -q '{invocation.review} detect' "$CONSULT_SKILL" \
+  && grep -q '{invocation.review} new-ctx --kind consult' "$CONSULT_SKILL" \
+  && grep -q '{invocation.review} consult --context-file <path>' "$CONSULT_SKILL" \
+  && grep -q 'Never invoke.*claude\|never invoke.*claude' "$CONSULT_SKILL"; then
+  ok "consult-peer uses only the supported peer runtime"
+else
+  no "consult-peer invocation contract is incomplete"
+fi
+
+if [ -f "$CONSULT_SKILL" ] \
+  && grep -q 'initial assessment' "$CONSULT_SKILL" \
+  && grep -q 'Do not include.*initial assessment\|do not include.*initial assessment' "$CONSULT_SKILL" \
+  && grep -q 'one focused question' "$CONSULT_SKILL" \
+  && grep -q 'prefer' "$CONSULT_SKILL"; then
+  ok "consult-peer preserves an independent peer brief"
+else
+  no "consult-peer independence contract is incomplete"
+fi
+
+if [ -f "$CONSULT_SKILL" ] \
+  && grep -qi 'credentials' "$CONSULT_SKILL" \
+  && grep -qi 'personal data' "$CONSULT_SKILL" \
+  && grep -q 'no bypass\|Never bypass' "$CONSULT_SKILL" \
+  && grep -q 'revoke or rotate' "$CONSULT_SKILL" \
+  && grep -q 'Do not repeat a sensitive value' "$CONSULT_SKILL" \
+  && grep -q 'CANDIDATE APPROACHES START' "$CONSULT_SKILL"; then
+  ok "consult-peer defines safety and bundle contracts"
+else
+  no "consult-peer safety or bundle contract is incomplete"
+fi
+
+if [ -f "$CONSULT_SKILL" ] \
+  && grep -q 'rerun_same_command_once' "$CONSULT_SKILL" \
+  && grep -q 'missing_recommendation_line' "$CONSULT_SKILL" \
+  && grep -q 'Peer view' "$CONSULT_SKILL" \
+  && grep -q 'agreement is not verification' "$CONSULT_SKILL"; then
+  ok "consult-peer defines retry and synthesis behavior"
+else
+  no "consult-peer retry or synthesis contract is incomplete"
+fi
+
 # --------------------------------------------------------- README contract
 group "README matches the shipped review workflow"
 ROOT_README="$REPO_ROOT/README.md"
@@ -95,6 +149,14 @@ grep -q 'Scope / Out of scope' "$ROOT_README" \
 grep -q 'do not send a review or consume model tokens' "$ROOT_README" \
   && ok "README describes local-only commands accurately" \
   || no "README local-only command description is stale"
+
+grep -q '`consult-peer`' "$ROOT_README" \
+  && grep -q 'payload-only' "$ROOT_README" \
+  && grep -q 'one peer request' "$ROOT_README" \
+  && grep -q '`consult-peer`' "$PLUGIN_README" \
+  && grep -q 'peer account.*quota' "$PLUGIN_README" \
+  && ok "README documents consultation scope, confinement, and cost" \
+  || no "README consultation contract is incomplete"
 
 if grep -Eq '^## (Safety|Troubleshooting)$' "$ROOT_README" "$PLUGIN_README"; then
   no "removed README sections returned"
@@ -290,12 +352,119 @@ R=$(newrepo basic); cd "$R"
 cli detect       | grep -q '"ok": true'        && ok "detect"       || no "detect"
 cli inspect-repo | grep -q '"inWorkTree": true'&& ok "inspect-repo" || no "inspect-repo"
 cli new-ctx --kind code | grep -q '"ok": true' && ok "new-ctx"      || no "new-ctx"
+cli new-ctx --kind consult | grep -q '"ok": true' && ok "new-ctx consult" || no "new-ctx consult"
 cli new-ctx --kind bogus| grep -q "required"   && ok "new-ctx rejects bad --kind" || no "new-ctx validation"
 cli bogus-subcommand    | grep -q "unknown subcommand" && ok "unknown subcommand rejected" || no "dispatcher"
 cli execute             | grep -q "unknown subcommand" && ok "removed execute command is rejected" || no "execute command still exposed"
 cli --help              | grep -q " execute" && no "help still advertises execute" || ok "help lists review commands only"
+cli --help              | grep -q 'consult --context-file PATH \[--model NAME\]' \
+  && ok "help documents the optional consultation model" \
+  || no "help omits the optional consultation model"
 cli detect              | grep -Eq '"execute"|executeConfinement' \
   && no "detect still advertises execution" || ok "detect exposes review invocation only"
+
+# --------------------------------------------------------- peer consultation
+group "peer consultation runtime contract"
+R=$(newrepo consult); cd "$R"
+QUESTION_CTX="$WORK/consult-question.txt"
+EMPTY_CTX="$WORK/consult-empty-optionals.txt"
+MISSING_CTX="$WORK/consult-missing-question.txt"
+printf '===== QUESTION START =====\nUse Redis or the database?\n===== QUESTION END =====\n' > "$QUESTION_CTX"
+printf '===== QUESTION START =====\nUse Redis or the database?\n===== QUESTION END =====\n===== CONTEXT START =====\n\n===== CONTEXT END =====\n===== CANDIDATE APPROACHES START =====\n\n===== CANDIDATE APPROACHES END =====\n' > "$EMPTY_CTX"
+printf '===== CONTEXT START =====\nNo question\n===== CONTEXT END =====\n' > "$MISSING_CTX"
+
+CIN="$WORK/consult-codex-input.txt"
+out=$(FAKE_CODEX_STATUS="RECOMMENDATION: Use the database" FAKE_CODEX_INPUTLOG="$CIN" cli consult --context-file "$QUESTION_CTX")
+printf '%s' "$out" | node -e '
+let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+  const x=JSON.parse(s); if(!x.ok || x.peer!=="codex" || "status" in x || !x.output.startsWith("RECOMMENDATION:")) process.exit(1);
+});' 2>/dev/null \
+  && ok "question-only consultation succeeds through codex without review status" \
+  || no "codex consultation contract failed: $(printf '%s' "$out" | head -2)"
+
+if [ -f "$CIN" ] && ! grep -q 'CONTEXT START\|CANDIDATE APPROACHES START' "$CIN"; then
+  ok "absent optional sections are omitted from peer payload"
+else
+  no "absent optional sections leaked into normalized peer payload"
+fi
+
+CIN_EMPTY="$WORK/consult-codex-empty-input.txt"
+FAKE_CODEX_STATUS="RECOMMENDATION: Use the database" FAKE_CODEX_INPUTLOG="$CIN_EMPTY" \
+  cli consult --context-file "$EMPTY_CTX" | grep -q '"ok": true' \
+  && ! grep -q 'CONTEXT START\|CANDIDATE APPROACHES START' "$CIN_EMPTY" \
+  && ok "present-but-empty optional sections are omitted" \
+  || no "empty optional sections changed the peer payload"
+
+variants_ok=true
+for recommendation in \
+  '**RECOMMENDATION:** Use the database' \
+  '# Recommendation: Use the database' \
+  '- **Recommendation:** Use the database' \
+  '`recommendation:` Use the database'
+do
+  FAKE_CODEX_STATUS="$recommendation" cli consult --context-file "$QUESTION_CTX" \
+    | grep -q '"ok": true' || variants_ok=false
+done
+[ "$variants_ok" = true ] \
+  && ok "bounded markdown recommendation variants are accepted" \
+  || no "a documented recommendation variant was rejected"
+
+FAKE_CODEX_STATUS="Here is my advice" cli consult --context-file "$QUESTION_CTX" \
+  | grep -q '"error": "missing_recommendation_line"' \
+  && ok "missing recommendation label fails closed" || no "missing label was accepted"
+FAKE_CODEX_EMPTY=true cli consult --context-file "$QUESTION_CTX" \
+  | grep -q '"error": "missing_recommendation_line"' \
+  && ok "empty peer output fails closed" || no "empty peer output was accepted"
+cli consult --context-file "$MISSING_CTX" | grep -q '"error": "invalid_usage"' \
+  && ok "consultation requires a question" || no "missing question was accepted"
+cli consult --context-file "$QUESTION_CTX" --bogus | grep -q '"error": "invalid_usage"' \
+  && ok "consultation rejects unknown flags" || no "consultation accepted an unknown flag"
+
+out=$(FAKE_CLAUDE_STATUS="RECOMMENDATION: Use the database" env ADVERSARIAL_REVIEW_HOST=codex \
+  node "$CLI_JS" consult --context-file "$QUESTION_CTX" 2>&1)
+printf '%s' "$out" | node -e '
+let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+  const x=JSON.parse(s); if(!x.ok || x.peer!=="claude" || "status" in x) process.exit(1);
+});' 2>/dev/null \
+  && ok "consultation succeeds through claude without review status" \
+  || no "claude consultation contract failed: $(printf '%s' "$out" | head -2)"
+
+out=$(FAKE_CLAUDE_EMPTY=true env ADVERSARIAL_REVIEW_HOST=codex \
+  node "$CLI_JS" consult --context-file "$QUESTION_CTX" 2>&1)
+printf '%s' "$out" | node -e '
+let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+  const x=JSON.parse(s); if(x.error!=="missing_recommendation_line" || x.output!=="") process.exit(1);
+});' 2>/dev/null \
+  && ok "claude empty-output fixture emits an empty result" \
+  || no "claude empty-output fixture contains reply text"
+
+CAL="$WORK/consult-codex-args.log"; : > "$CAL"
+FAKE_CODEX_STATUS="RECOMMENDATION: Use the database" FAKE_CODEX_ARGLOG="$CAL" \
+  cli consult --context-file "$QUESTION_CTX" >/dev/null 2>&1
+grep -q -- '-s read-only' "$CAL" && grep -q -- '--skip-git-repo-check' "$CAL" \
+  && ok "codex consultation is payload-only and read-only" \
+  || no "codex consultation confinement changed"
+
+AL="$WORK/consult-claude-args.log"; : > "$AL"
+FAKE_CLAUDE_STATUS="RECOMMENDATION: Use the database" FAKE_CLAUDE_ARGLOG="$AL" \
+  env ADVERSARIAL_REVIEW_HOST=codex node "$CLI_JS" consult --context-file "$QUESTION_CTX" >/dev/null 2>&1
+grep -q -- '--tools' "$AL" && ! grep -q 'Read,Grep,Glob' "$AL" \
+  && ok "claude consultation has no tools" || no "claude consultation received repository tools"
+
+FAKE_CLAUDE_IS_ERROR=true FAKE_CLAUDE_STATUS="API Error: 529 Overloaded" \
+  env ADVERSARIAL_REVIEW_HOST=codex node "$CLI_JS" consult --context-file "$QUESTION_CTX" 2>&1 \
+  | grep -q '"retryInstruction": "rerun_same_command_once"' \
+  && ok "consultation reuses transient retry metadata" || no "consultation lost retry metadata"
+
+printf '===== PLAN START =====\nship the thing\n===== PLAN END =====\n' > "$WORK/review-shape-ctx.txt"
+review_out=$(FAKE_CODEX_RC=1 FAKE_CODEX_STATUS="hard failure" cli plan-review --context-file "$WORK/review-shape-ctx.txt")
+printf '%s' "$review_out" | node -e '
+let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+  const x=JSON.parse(s), keys=Object.keys(x).sort().join(",");
+  if(keys!=="error,ok,output,peer,rc,stderr,stdout" || x.error!=="peer_failed") process.exit(1);
+});' 2>/dev/null \
+  && ok "review peer-failure shape is pinned before refactor" \
+  || no "review peer-failure shape changed before refactor"
 
 group "large JSON output survives the pipe"
 # The child must write to a PIPE, which is the only condition under which the

@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "peer-pressure",
-  "description": "Adversarial plan review and code review. The reviewer is always the agent CLI that is not the host: Codex reviews Claude Code, and Claude Code reviews Codex.",
+  "description": "Cross-model consultation, plan review, and code review. The peer is always the agent CLI that is not the host: Claude Code uses Codex, and Codex uses Claude Code.",
   "owner": {
     "name": "Alex Hodges"
   },
@@ -12,7 +12,7 @@
     {
       "name": "adversarial-review",
       "source": "./plugins/adversarial-review",
-      "description": "Adversarial plan review and code review. The reviewer is always the agent CLI that is not the host: Codex reviews Claude Code, and Claude Code reviews Codex.",
+      "description": "Cross-model consultation, plan review, and code review. The peer is always the agent CLI that is not the host: Claude Code uses Codex, and Codex uses Claude Code.",
       "version": "2.0.2",
       "author": {
         "name": "Alex Hodges"

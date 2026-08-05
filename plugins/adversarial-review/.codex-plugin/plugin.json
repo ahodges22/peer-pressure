@@ -1,7 +1,7 @@
 {
   "name": "adversarial-review",
   "version": "2.0.2",
-  "description": "Adversarial plan review and code review, driven by a peer agent CLI.",
+  "description": "Cross-model consultation and adversarial review, driven by a peer agent CLI.",
   "author": {
     "name": "Alex Hodges"
   },
@@ -11,6 +11,8 @@
   "keywords": [
     "code-review",
     "plan-review",
+    "consultation",
+    "second-opinion",
     "adversarial",
     "claude-code",
     "codex"
@@ -18,8 +20,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Peer Pressure",
-    "shortDescription": "Have the other agent CLI review your work",
-    "longDescription": "Adversarial plan review and code review. The reviewer is always the agent CLI that is not running the skill: Codex reviews Claude Code, and Claude Code reviews Codex, so the critique does not share the author's blind spots.",
+    "shortDescription": "Get advice or review from the other agent CLI",
+    "longDescription": "Cross-model consultation, plan review, and code review. The peer is always the agent CLI that is not running the skill: Claude Code uses Codex, and Codex uses Claude Code, so advice and critique come from a different model.",
     "developerName": "Alex Hodges",
     "category": "Developer Tools",
     "capabilities": [
@@ -30,6 +32,7 @@
     "websiteURL": "https://github.com/ahodges22/peer-pressure",
     "brandColor": "#B4483C",
     "defaultPrompt": [
+      "Ask the other model for an independent opinion on this decision.",
       "Review this plan adversarially before I build it.",
       "Run an adversarial code review on my uncommitted changes."
     ]

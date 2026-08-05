@@ -54,11 +54,12 @@ function usage() {
     "Usage:",
     "  adversarial-review detect",
     "  adversarial-review inspect-repo",
-    "  adversarial-review new-ctx --kind code|plan",
+    "  adversarial-review new-ctx --kind code|plan|consult",
     "  adversarial-review plan-review --context-file PATH",
     "  adversarial-review code-review --mode uncommitted|staged|branch [--base REF] [--paths \"a b\"] [--context-file PATH] [--repo-context] [--self-collect] [--include-secrets] [--include-large] [--include-binary] [--allow-skipped-large]",
+    "  adversarial-review consult --context-file PATH [--model NAME]",
     "",
-    "The context file is a single file with fenced sections (PLAN or CHANGES / UNRESOLVED FINDINGS / LATEST FIXES).",
+    "The context file is a single file with fenced sections for the selected command.",
     "",
     `Global: --host <${HOSTS.join("|")}> overrides host auto-detection (also ADVERSARIAL_REVIEW_HOST).`,
     "The reviewer is always the agent CLI that is NOT the host: Claude Code -> Codex, Codex -> Claude Code.",
@@ -120,8 +121,7 @@ function requirePeer(host) {
   return { peer, detection };
 }
 
-// Shared review pipeline. Builds payload, runs the peer, parses STATUS, emits JSON.
-function runReview({ promptName, promptSubs, payload, cwd, model }) {
+function runPeer({ promptName, promptSubs, payload, cwd, model }) {
   const { host } = requireHost();
   const { peer } = requirePeer(host);
 
@@ -158,9 +158,14 @@ function runReview({ promptName, promptSubs, payload, cwd, model }) {
       stderr: result.stderr, stdout: result.stdout, output: result.output
     }, 3);
   }
-  const status = parseStatus(result.output, REVIEW_STATUSES);
-  if (!status) emit({ ok: false, error: "missing_status_line", peer: peer.id, output: result.output }, 4);
-  return { status, output: result.output, peer };
+  return { output: result.output, peer };
+}
+
+function runReview(options) {
+  const { output, peer } = runPeer(options);
+  const status = parseStatus(output, REVIEW_STATUSES);
+  if (!status) emit({ ok: false, error: "missing_status_line", peer: peer.id, output }, 4);
+  return { status, output, peer };
 }
 
 function cmdDetect() {
@@ -198,7 +203,7 @@ function cmdNewCtx(argv) {
     options: { kind: { type: "string" } },
     allowPositionals: false
   });
-  if (!["code", "plan"].includes(values.kind)) die("--kind code|plan is required");
+  if (!["code", "plan", "consult"].includes(values.kind)) die("--kind code|plan|consult is required");
   const slug = crypto.randomBytes(8).toString("hex");
   const file = path.join(os.tmpdir(), `adversarial-${values.kind}-ctx-${slug}.txt`);
   emit({ ok: true, path: file, slug });
@@ -405,6 +410,50 @@ function cmdCodeReview(argv) {
   emit({ ok: true, status, output, skipped });
 }
 
+function hasRecommendationLine(output) {
+  let first = String(output ?? "").split(/\r?\n/).find((line) => line.trim());
+  if (!first) return false;
+  first = first.trim().replace(/^(?:#{1,6}|[-+*])\s+/, "");
+  return /^(?:\*\*|__|\*|_|`)?recommendation(?:\*\*|__|\*|_|`)?\s*:\s*(?:\*\*|__|\*|_|`)?/i.test(first);
+}
+
+function cmdConsult(argv) {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      "context-file": { type: "string" },
+      "model": { type: "string" }
+    },
+    allowPositionals: false
+  });
+  if (!values["context-file"]) die("--context-file PATH is required");
+
+  const bundle = parseBundle(
+    readFileIf(values["context-file"]),
+    ["QUESTION", "CONTEXT", "CANDIDATE APPROACHES"]
+  );
+  if (!bundle.QUESTION) die("context file missing QUESTION section");
+
+  const sections = [
+    ["QUESTION", bundle.QUESTION],
+    ["CONTEXT", bundle.CONTEXT],
+    ["CANDIDATE APPROACHES", bundle["CANDIDATE APPROACHES"]]
+  ].filter(([, body]) => body);
+  const payload = sections.flatMap(([label, body]) => [
+    `===== ${label} START =====`, body, `===== ${label} END =====`
+  ]).join("\n") + "\n";
+
+  const { output, peer } = runPeer({
+    promptName: "consult",
+    payload,
+    model: values.model
+  });
+  if (!hasRecommendationLine(output)) {
+    emit({ ok: false, error: "missing_recommendation_line", peer: peer.id, output }, 4);
+  }
+  emit({ ok: true, peer: peer.id, output });
+}
+
 // `--host` is global rather than per-subcommand: it answers "who is driving
 // this run", which is orthogonal to what the subcommand does. Strip it before
 // dispatch so no subcommand parser has to declare it.
@@ -450,6 +499,7 @@ switch (sub) {
   case "new-ctx": cmdNewCtx(rest); break;
   case "plan-review": cmdPlanReview(rest); break;
   case "code-review": cmdCodeReview(rest); break;
+  case "consult": cmdConsult(rest); break;
   default: die(`unknown subcommand '${sub}'\n\n${usage()}`);
 }
 }

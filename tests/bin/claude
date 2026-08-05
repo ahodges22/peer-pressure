@@ -16,6 +16,8 @@
 #   FAKE_CLAUDE_IS_ERROR  emit is_error:true in the JSON  (default unset)
 #   FAKE_CLAUDE_HELP_OMIT space-separated flags to drop from --help output
 #   FAKE_CLAUDE_ARGLOG    if set, append argv to this file for assertions
+#   FAKE_CLAUDE_INPUTLOG  if set, write stdin to this file for assertions
+#   FAKE_CLAUDE_EMPTY     if true, emit an empty result
 set -uo pipefail
 
 if [ "${1:-}" = "--version" ]; then
@@ -40,14 +42,23 @@ if [ -n "${FAKE_CLAUDE_ARGLOG:-}" ]; then
 fi
 
 # Drain stdin so the caller's write never blocks on a full pipe.
-cat > /dev/null 2>/dev/null || true
+if [ -n "${FAKE_CLAUDE_INPUTLOG:-}" ]; then
+  cat > "$FAKE_CLAUDE_INPUTLOG" 2>/dev/null || true
+else
+  cat > /dev/null 2>/dev/null || true
+fi
 
-status="${FAKE_CLAUDE_STATUS:-STATUS: APPROVED}"
 is_error="${FAKE_CLAUDE_IS_ERROR:-false}"
 
 # `claude --print` exits 0 even when the turn failed, so the JSON envelope, not
 # the exit code, is what the backend must key on. The stub reproduces that.
-printf '{"type":"result","subtype":"success","is_error":%s,"result":"%s\\n\\nfake-claude reply body.","session_id":"stub"}\n' \
-  "$is_error" "$status"
+if [ "${FAKE_CLAUDE_EMPTY:-false}" = "true" ]; then
+  printf '{"type":"result","subtype":"success","is_error":%s,"result":"","session_id":"stub"}\n' \
+    "$is_error"
+else
+  status="${FAKE_CLAUDE_STATUS:-STATUS: APPROVED}"
+  printf '{"type":"result","subtype":"success","is_error":%s,"result":"%s\\n\\nfake-claude reply body.","session_id":"stub"}\n' \
+    "$is_error" "$status"
+fi
 
 exit "${FAKE_CLAUDE_RC:-0}"

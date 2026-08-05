@@ -10,6 +10,8 @@
 #   FAKE_CODEX_STATUS   first line of the reply       (default "STATUS: APPROVED")
 #   FAKE_CODEX_RC       exit code for `exec`          (default 0)
 #   FAKE_CODEX_ARGLOG   if set, append argv to this file for assertions
+#   FAKE_CODEX_INPUTLOG if set, write stdin to this file for assertions
+#   FAKE_CODEX_EMPTY    if true, leave the output message empty
 set -uo pipefail
 
 if [ "${1:-}" = "--version" ]; then
@@ -22,7 +24,11 @@ if [ -n "${FAKE_CODEX_ARGLOG:-}" ]; then
 fi
 
 # Drain stdin so the caller's write never blocks on a full pipe.
-cat > /dev/null 2>/dev/null || true
+if [ -n "${FAKE_CODEX_INPUTLOG:-}" ]; then
+  cat > "$FAKE_CODEX_INPUTLOG" 2>/dev/null || true
+else
+  cat > /dev/null 2>/dev/null || true
+fi
 
 out=""
 prev=""
@@ -31,7 +37,7 @@ for arg in "$@"; do
   prev="$arg"
 done
 
-if [ -n "$out" ]; then
+if [ -n "$out" ] && [ "${FAKE_CODEX_EMPTY:-false}" != "true" ]; then
   mkdir -p "$(dirname "$out")"
   printf '%s\n\nfake-codex reply body.\n' "${FAKE_CODEX_STATUS:-STATUS: APPROVED}" > "$out"
 fi
