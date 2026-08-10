@@ -911,10 +911,27 @@ FAKE_AGENT_STATUS='RECOMMENDATION: Use the database' cursor_cli consult --peer c
   && ok "Cursor retry preserves stdin and alias in a fresh workspace" \
   || no "Cursor retry does not preserve the request safely"
 
-FAKE_AGENT_OUTPUT_BYTES=34000000 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
-  | grep -q '"error": "peer_output_too_large"' \
-  && ok "Cursor oversized output has its own terminal error" \
-  || no "Cursor oversized output error is wrong"
+out=$(FAKE_AGENT_OUTPUT_BYTES=34000000 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX")
+printf '%s' "$out" | node -e '
+let s = "";
+process.stdin.on("data", (d) => { s += d; }).on("end", () => {
+  const x = JSON.parse(s);
+  const failures = [];
+  if (x.error !== "peer_output_too_large") failures.push(`error=${x.error}`);
+  if (x.peer !== "cursor") failures.push(`peer=${x.peer}`);
+  if (!(typeof x.stdoutBytes === "number" && x.stdoutBytes > 0)) failures.push("stdoutBytes must be positive");
+  if (!(typeof x.stderrBytes === "number" && x.stderrBytes >= 0)) failures.push("stderrBytes must be non-negative");
+  for (const key of ["stdoutExcerpt", "stderrExcerpt"]) {
+    if (x[key] !== undefined && !(typeof x[key] === "string" && x[key].length <= 4096)) {
+      failures.push(`${key} must be a string of at most 4096 characters`);
+    }
+  }
+  if (Buffer.byteLength(s, "utf8") >= 20_000) failures.push(`response is ${Buffer.byteLength(s, "utf8")} bytes`);
+  if (Object.hasOwn(x, "output")) failures.push("response includes duplicate output");
+  if (failures.length > 0) throw new Error(failures.join("; "));
+});' \
+  && ok "Cursor oversized output response is bounded and machine-readable" \
+  || no "Cursor oversized output response is oversized or missing diagnostics"
 FAKE_AGENT_OUTPUT_BYTES=34000000 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
   | grep -q '"retryable"' \
   && no "Cursor oversized output is retryable" || ok "Cursor oversized output is terminal"

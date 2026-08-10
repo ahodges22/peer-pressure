@@ -159,7 +159,11 @@ function runPeer({ promptName, promptSubs, payload, cwd, model, peerOverride }) 
     if (result.outputTooLarge) {
       emit({
         ok: false, error: "peer_output_too_large", peer: peer.id, rc: result.rc,
-        stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
+        stdoutBytes: Buffer.byteLength(result.stdout, "utf8"),
+        stderrBytes: Buffer.byteLength(result.stderr, "utf8"),
+        ...(result.stdout ? { stdoutExcerpt: result.stdout.slice(-4096) } : {}),
+        ...(result.stderr ? { stderrExcerpt: result.stderr.slice(-4096) } : {}),
+        ...diagnostics
       }, 3);
     }
     if (peer.id === "cursor" && result.timedOut) {
