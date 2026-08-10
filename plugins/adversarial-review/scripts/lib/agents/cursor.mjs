@@ -56,6 +56,17 @@ function cleanup(workspace) {
   }
 }
 
+export function buildRunOptions({ workspace, input, timeoutMs = 600_000 }) {
+  return {
+    cwd: workspace,
+    input,
+    encoding: "utf8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer: 32 * 1024 * 1024
+  };
+}
+
 export const agent = {
   id: "cursor",
   displayName: "Cursor Agent CLI",
@@ -122,7 +133,7 @@ export const agent = {
     };
   },
 
-  run({ prompt, payload, cwd, model, timeoutMs = 180_000 }) {
+  run({ prompt, payload, cwd, model, timeoutMs = 600_000 }) {
     assertPayloadSize(payload);
 
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-review-"));
@@ -149,14 +160,7 @@ export const agent = {
     try {
       let processResult;
       try {
-        processResult = spawnSync("agent", args, {
-          cwd: workspace,
-          input,
-          encoding: "utf8",
-          timeout: timeoutMs,
-          killSignal: "SIGKILL",
-          maxBuffer: 32 * 1024 * 1024
-        });
+        processResult = spawnSync("agent", args, buildRunOptions({ workspace, input, timeoutMs }));
       } catch (error) {
         processResult = { error };
       }

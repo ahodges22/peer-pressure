@@ -624,7 +624,7 @@ import path from "node:path";
 
 const modulePath = process.env.CURSOR_MODULE;
 const work = process.env.FAKE_AGENT_ROOT;
-const { agent, CURSOR_MODELS, SUPPORTED_CURSOR_VERSION } = await import(modulePath);
+const { agent, buildRunOptions, CURSOR_MODELS, SUPPORTED_CURSOR_VERSION } = await import(modulePath);
 const requiredFlags = ["--print", "--output-format", "--mode", "--sandbox", "--trust", "--workspace", "--add-dir", "--model"];
 const saved = { ...process.env };
 const reset = () => {
@@ -644,6 +644,7 @@ assert.deepEqual(CURSOR_MODELS, { composer: "composer-2.5", grok: "cursor-grok-4
 assert(Object.isFrozen(CURSOR_MODELS));
 assert.equal(agent.id, "cursor");
 assert.equal(agent.command, "agent");
+assert.equal(buildRunOptions({ workspace: "/tmp/cursor-test", input: "review input" }).timeout, 600_000);
 assert.equal(detect({ FAKE_AGENT_VERSION: SUPPORTED_CURSOR_VERSION }).ok, true);
 for (const version of ["2026.08.03-aaa8809", "2026.08.05-aaa8809", "2026.08.04-wrong", "2026.08.04"]) {
   const result = detect({ FAKE_AGENT_VERSION: version });
