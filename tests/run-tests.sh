@@ -700,9 +700,10 @@ const args = fs.readFileSync(arglog, "utf8").trim().split("\n").filter((line) =>
 const workspace = args[args.indexOf("--workspace") + 1];
 assert.deepEqual(args, [
   "--print", "--output-format", "json", "--mode", "ask", "--sandbox", "enabled", "--trust",
-  "--disable-project-configs", "--exclude-workspace-context", "--disable-auto-update",
+  "--disable-project-configs", "--disable-auto-update",
   "--workspace", workspace, "--model", "composer-2.5"
 ]);
+assert(!args.includes("--exclude-workspace-context"));
 assert.equal(fs.readFileSync(workspaces, "utf8").match(/^entries=$/m)?.[0], "entries=");
 assert(!args.includes("review prompt"));
 

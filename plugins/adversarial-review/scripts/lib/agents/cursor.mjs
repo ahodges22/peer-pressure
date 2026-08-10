@@ -148,7 +148,6 @@ export const agent = {
       "--sandbox", "enabled",
       "--trust",
       "--disable-project-configs",
-      "--exclude-workspace-context",
       "--disable-auto-update",
       "--workspace", workspace,
       ...(cwd ? ["--add-dir", path.resolve(cwd)] : []),
