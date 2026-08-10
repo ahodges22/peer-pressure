@@ -579,8 +579,8 @@ FAKE_CLAUDE_VERSION=1.9.0 env ADVERSARIAL_REVIEW_HOST=codex node "$CLI_JS" detec
 # A build missing a flag the backend emits would fail deep inside the CLI with an
 # opaque usage error; detect names the flag instead.
 FAKE_CLAUDE_HELP_OMIT="--safe-mode" env ADVERSARIAL_REVIEW_HOST=codex node "$CLI_JS" detect 2>&1 \
-  | grep -q 'unsupported_build\|missingFlags' \
-  && ok "missing required flag is named at detect time" || no "flag probe not enforced"
+  | grep -q '"error": "peer_unavailable"' \
+  && ok "default Claude flag failure preserves peer_unavailable" || no "default Claude detection mapping changed"
 
 # The reviewer must not inherit the host's CLAUDE.md, skills, plugins or MCP, and
 # must have no filesystem access when reviewing a payload-only diff.
@@ -628,6 +628,10 @@ if (classifyTransient({ rc: 0 })) bad.push("rc0 treated as failure");
 if (bad.length) { console.log(bad.join(" ")); process.exit(1); }
 ' >/dev/null 2>&1 && ok "status classification: 4 transient, 5 terminal, rc0 ignored" \
   || no "classifyTransient regression"
+
+FAKE_CODEX_SELF_KILL=true cli plan-review --context-file "$WORK/plan-ctx.txt" --first \
+  | grep -q '"retryable": true' \
+  && ok "default-peer timeout remains retryable" || no "default-peer timeout became terminal"
 
 # -------------------------------------------------------------- cursor backend
 group "cursor backend"
@@ -677,6 +681,7 @@ for (const version of ["2026.08.03-aaa8809", "2026.08.05-aaa8809", "2026.08.04-w
   assert.deepEqual(result.setupHints, ["agent install 2026.08.04-aaa8809"]);
 }
 assert.equal(detect({ FAKE_AGENT_VERSION: "nightly" }).reason, "unsupported_version_format");
+assert.equal(detect({ FAKE_AGENT_VERSION: "" }).version, "");
 assert.equal(detect({ FAKE_AGENT_VERSION_RC: "1" }).reason, "authentication_failed");
 assert.deepEqual(detect({ FAKE_AGENT_HELP_OMIT: "--mode" }).missingFlags, ["--mode"]);
 assert.deepEqual(detect({ FAKE_AGENT_HELP_OMIT: requiredFlags.join(" ") }).missingFlags, requiredFlags);
@@ -848,13 +853,14 @@ MISSING_AGENT_BIN="$WORK/missing-agent-bin"
 mkdir -p "$MISSING_AGENT_BIN"
 ln -s "$TESTS_DIR/bin/codex" "$MISSING_AGENT_BIN/codex"
 ln -s "$TESTS_DIR/bin/claude" "$MISSING_AGENT_BIN/claude"
-for failure in missing auth build version flag; do
+for failure in missing auth build version empty_version flag; do
   : > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
   case "$failure" in
     missing) out=$(env PATH="$MISSING_AGENT_BIN:/usr/bin:/bin" PEER_PRESSURE_TEST_AGENT=peer-pressure-test-agent FAKE_CODEX_ARGLOG="$CODEX_ARGS" FAKE_CLAUDE_ARGLOG="$CLAUDE_ARGS" "$NODE_BIN" "$CLI_JS" detect --peer cursor 2>&1) ; expected='"error": "peer_unavailable"' ;;
     auth) out=$(FAKE_AGENT_VERSION_RC=1 cursor_cli detect --peer cursor) ; expected='"error": "authentication_failed"' ;;
     build) out=$(FAKE_AGENT_VERSION=2026.08.03-aaa8809 cursor_cli detect --peer cursor) ; expected='"error": "unsupported_build"' ;;
     version) out=$(FAKE_AGENT_VERSION=nightly cursor_cli detect --peer cursor) ; expected='"error": "unsupported_version_format"' ;;
+    empty_version) out=$(FAKE_AGENT_VERSION= cursor_cli detect --peer cursor) ; expected='"version": ""' ;;
     flag) out=$(FAKE_AGENT_HELP_OMIT=--mode cursor_cli detect --peer cursor) ; expected='"missingFlags"' ;;
   esac
   printf '%s' "$out" | grep -q "$expected" \
@@ -889,6 +895,9 @@ FAKE_AGENT_SELF_KILL=true cursor_cli consult --peer cursor --model composer --co
 FAKE_AGENT_SELF_KILL=true cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
   | grep -q '"retryable"' \
   && no "Cursor timeout is retryable" || ok "Cursor timeout has no retry metadata"
+FAKE_AGENT_SELF_KILL=true FAKE_AGENT_MODEL_REJECT=true cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"timedOut": true' \
+  && ok "Cursor timeout outranks model rejection output" || no "Cursor model rejection hides a timeout"
 FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='rate limit' cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
   | grep -q '"retryable"' \
   && no "Cursor strict JSON failure is retryable" || ok "Cursor strict JSON failure is terminal"

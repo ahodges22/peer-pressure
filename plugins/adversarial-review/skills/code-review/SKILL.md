@@ -7,7 +7,7 @@ description: Adversarial code review loop driven by a peer agent CLI. Submits co
 
 Iterative adversarial code review. Submit a git diff to the **peer agent** for critique, fix material findings, repeat until approved or the user stops.
 
-The peer is always the agent CLI that is **not** running this skill - Claude Code is reviewed by Codex, Codex is reviewed by Claude Code. A reviewer that shares the author's model shares the author's blind spots. The runtime picks the peer for you; never override it.
+By default, the peer is the agent CLI that is **not** running this skill - Claude Code is reviewed by Codex, Codex is reviewed by Claude Code. A reviewer that shares the author's model shares the author's blind spots. The runtime picks the peer for you. Cursor is the only explicit override.
 
 The default workflow always uses that host-derived peer. Use the explicit Cursor workflow only when the user explicitly requests Cursor with one alias: `composer`, `grok`, `kimi`, or `glm`.
 

@@ -7,7 +7,7 @@ description: Consults the opposite agent CLI for one independent, non-binding op
 
 Obtain one independent view from the agent CLI that is not the host, then evaluate it and give the user a final recommendation. This is consultation, not approval or adversarial review.
 
-The runtime selects the peer. Claude Code consults Codex, and Codex consults Claude Code. Never override that pairing. Never invoke `claude`, `codex`, or another model CLI directly.
+The runtime selects the peer. Claude Code consults Codex, and Codex consults Claude Code. By default, never override that pairing. Cursor is the only explicit exception. Never invoke `claude`, `codex`, or another model CLI directly.
 
 The default workflow always uses that host-derived peer. Use the explicit Cursor workflow only when the user explicitly requests Cursor with one alias: `composer`, `grok`, `kimi`, or `glm`.
 

@@ -7,7 +7,7 @@ description: Adversarial plan review loop driven by a peer agent CLI. Drafts a p
 
 Draft a plan, submit it to the **peer agent** for adversarial critique, address merge-blocking findings, repeat until the peer approves or the user stops at a checkpoint.
 
-The peer is always the agent CLI that is **not** running this skill - Claude Code is reviewed by Codex, Codex is reviewed by Claude Code. That is the entire point: a reviewer that shares the author's model shares the author's blind spots. The runtime picks the peer for you; never override it.
+By default, the peer is the agent CLI that is **not** running this skill - Claude Code is reviewed by Codex, Codex is reviewed by Claude Code. That is the entire point: a reviewer that shares the author's model shares the author's blind spots. The runtime picks the peer for you. Cursor is the only explicit override.
 
 The default workflow always uses that host-derived peer. Use the explicit Cursor workflow only when the user explicitly requests Cursor with one alias: `composer`, `grok`, `kimi`, or `glm`.
 

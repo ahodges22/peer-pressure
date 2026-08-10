@@ -104,7 +104,8 @@ function requireHost() {
 
 // The peer must be installed AND new enough. An old CLI rejects the flags the
 // backend emits and would otherwise fail as an opaque `peer_failed`.
-function peerDetectionError(reason) {
+function peerDetectionError(peer, reason) {
+  if (peer.id !== "cursor") return reason === "too_old" ? "peer_too_old" : "peer_unavailable";
   return {
     too_old: "peer_too_old",
     not_installed: "peer_unavailable",
@@ -120,11 +121,11 @@ function requirePeer(host, peerOverride) {
   if (!detection.ok) {
     emit({
       ok: false,
-      error: peerDetectionError(detection.reason),
+      error: peerDetectionError(peer, detection.reason),
       host,
       peer: peer.id,
       peerName: peer.displayName,
-      ...(detection.version ? { version: detection.version } : {}),
+      ...(detection.version !== undefined ? { version: detection.version } : {}),
       ...(detection.minimum ? { minimum: detection.minimum } : {}),
       ...(detection.supportedVersion ? { supportedVersion: detection.supportedVersion } : {}),
       ...(detection.missingFlags ? { missingFlags: detection.missingFlags } : {}),
@@ -161,6 +162,13 @@ function runPeer({ promptName, promptSubs, payload, cwd, model, peerOverride }) 
         stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
       }, 3);
     }
+    if (peer.id === "cursor" && result.timedOut) {
+      emit({
+        ok: false, error: "peer_failed", peer: peer.id, rc: result.rc, timedOut: true,
+        ...(result.apiErrorStatus ? { apiErrorStatus: result.apiErrorStatus } : {}),
+        stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
+      }, 3);
+    }
     if (result.modelRejected) {
       emit({
         ok: false, error: "cursor_model_unavailable", peer: peer.id, rc: result.rc,
@@ -173,13 +181,6 @@ function runPeer({ promptName, promptSubs, payload, cwd, model, peerOverride }) 
       emit({
         ok: false, error: "peer_failed", peer: peer.id, rc: result.rc,
         strictJsonFailure: true,
-        stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
-      }, 3);
-    }
-    if (result.timedOut) {
-      emit({
-        ok: false, error: "peer_failed", peer: peer.id, rc: result.rc, timedOut: true,
-        ...(result.apiErrorStatus ? { apiErrorStatus: result.apiErrorStatus } : {}),
         stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
       }, 3);
     }
@@ -236,8 +237,8 @@ function cmdDetect(peerOverride) {
     ...(d.ok
       ? { version: d.version, versionCheck: d.versionCheck, minimum: d.minimum }
       : {
-          error: peerDetectionError(d.reason),
-          ...(d.version ? { version: d.version } : {}),
+          error: peerDetectionError(peer, d.reason),
+          ...(d.version !== undefined ? { version: d.version } : {}),
           ...(d.minimum ? { minimum: d.minimum } : {}),
           ...(d.supportedVersion ? { supportedVersion: d.supportedVersion } : {}),
           ...(d.missingFlags ? { missingFlags: d.missingFlags } : {}),

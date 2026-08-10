@@ -8,7 +8,7 @@ if [ "${1:-}" = "--fixture-id" ]; then
 fi
 
 if [ "${1:-}" = "--version" ]; then
-  printf '%s\n' "${FAKE_AGENT_VERSION:-2026.08.04-aaa8809}"
+  printf '%s\n' "${FAKE_AGENT_VERSION-2026.08.04-aaa8809}"
   exit "${FAKE_AGENT_VERSION_RC:-0}"
 fi
 
@@ -66,11 +66,14 @@ if [ "${FAKE_AGENT_WRITE_WORKSPACE:-false}" = "true" ] && [ -n "$workspace" ]; t
   printf 'fixture workspace artifact\n' > "$workspace/fixture-artifact.txt"
 fi
 
+if [ "${FAKE_AGENT_MODEL_REJECT:-false}" = "true" ]; then
+  printf 'model not available: %s\n' "$model" >&2
+fi
+
 if [ -n "${FAKE_AGENT_SLEEP:-}" ]; then sleep "$FAKE_AGENT_SLEEP"; fi
 if [ "${FAKE_AGENT_SELF_KILL:-false}" = "true" ]; then kill -KILL "$$"; fi
 
 if [ "${FAKE_AGENT_MODEL_REJECT:-false}" = "true" ]; then
-  printf 'model not available: %s\n' "$model" >&2
   exit 1
 fi
 
