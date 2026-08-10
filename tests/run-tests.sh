@@ -872,6 +872,21 @@ FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='rate limit' cursor_c
 FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='rate limit' cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
   | grep -q '"strictJsonFailure": true' \
   && ok "Cursor strict JSON failure is identified" || no "Cursor strict JSON failure is not identified"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"error": "cursor_model_unavailable"' \
+  && ok "Cursor model rejection outranks strict JSON failure" || no "Cursor strict JSON failure hides model rejection"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"modelAlias": "grok"' \
+  && ok "Cursor strict model rejection reports its public alias" || no "Cursor strict model rejection lacks its alias"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"modelId": "cursor-grok-4.5-high"' \
+  && ok "Cursor strict model rejection reports its mapped ID" || no "Cursor strict model rejection lacks its mapped ID"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"modelListCommand": "agent --list-models"' \
+  && ok "Cursor strict model rejection reports model discovery" || no "Cursor strict model rejection lacks model discovery"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"retryable"' \
+  && no "Cursor strict model rejection is retryable" || ok "Cursor strict model rejection is terminal"
 FAKE_AGENT_MODEL_REJECT=true cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
   | grep -q '"error": "cursor_model_unavailable"' \
   && ok "Cursor model rejection has its own error" || no "Cursor model rejection error is wrong"

@@ -161,18 +161,18 @@ function runPeer({ promptName, promptSubs, payload, cwd, model, peerOverride }) 
         stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
       }, 3);
     }
-    if (result.strictJsonFailure) {
-      emit({
-        ok: false, error: "peer_failed", peer: peer.id, rc: result.rc,
-        strictJsonFailure: true,
-        stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
-      }, 3);
-    }
     if (result.modelRejected) {
       emit({
         ok: false, error: "cursor_model_unavailable", peer: peer.id, rc: result.rc,
         modelAlias: result.modelAlias, modelId: result.modelId,
         modelListCommand: result.modelListCommand,
+        stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
+      }, 3);
+    }
+    if (result.strictJsonFailure) {
+      emit({
+        ok: false, error: "peer_failed", peer: peer.id, rc: result.rc,
+        strictJsonFailure: true,
         stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
       }, 3);
     }
