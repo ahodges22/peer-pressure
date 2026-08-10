@@ -6,14 +6,14 @@
     "name": "Alex Hodges"
   },
   "metadata": {
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "plugins": [
     {
       "name": "adversarial-review",
       "source": "./plugins/adversarial-review",
       "description": "Cross-model consultation, plan review, and code review. The peer is always the agent CLI that is not the host: Claude Code uses Codex, and Codex uses Claude Code.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "Alex Hodges"
       },
