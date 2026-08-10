@@ -170,6 +170,16 @@ export const agent = {
       const outputTooLarge = processResult.error?.code === "ENOBUFS";
       const timedOut = !outputTooLarge &&
         (processResult.error?.code === "ETIMEDOUT" || Boolean(processResult.signal));
+      const spawnError = !outputTooLarge && !timedOut && processResult.error
+        ? {
+            ...(typeof processResult.error.code === "string" && processResult.error.code.length > 0
+              ? { code: processResult.error.code }
+              : {}),
+            message: typeof processResult.error.message === "string" && processResult.error.message.length > 0
+              ? processResult.error.message
+              : String(processResult.error)
+          }
+        : undefined;
       let output = stdout;
       let apiErrorStatus;
       let strictJsonFailure = false;
@@ -205,6 +215,7 @@ export const agent = {
         ...(strictJsonFailure ? { strictJsonFailure: true } : {}),
         ...(apiErrorStatus !== undefined ? { apiErrorStatus } : {}),
         ...(outputTooLarge ? { outputTooLarge: true } : {}),
+        ...(spawnError ? { spawnError } : {}),
         ...(modelRejected
           ? {
               modelRejected: true,

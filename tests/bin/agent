@@ -19,6 +19,7 @@ if [ "${1:-}" = "--help" ]; then
     esac
     printf '  %s stub flag\n' "$flag"
   done
+  if [ "${FAKE_AGENT_REMOVE_AFTER_HELP:-false}" = "true" ]; then rm -f "$0"; fi
   exit 0
 fi
 

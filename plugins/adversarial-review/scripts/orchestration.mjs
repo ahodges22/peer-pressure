@@ -198,6 +198,7 @@ function runPeer({ promptName, promptSubs, payload, cwd, model, peerOverride }) 
             retryInstruction: "rerun_same_command_once"
           }
         : {}),
+      ...(result.spawnError ? { spawnError: result.spawnError } : {}),
       stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
     }, 3);
   }

@@ -654,6 +654,7 @@ const work = process.env.FAKE_AGENT_ROOT;
 const { agent, buildRunOptions, CURSOR_MODELS, SUPPORTED_CURSOR_VERSION } = await import(modulePath);
 const requiredFlags = ["--print", "--output-format", "--mode", "--sandbox", "--trust", "--workspace", "--add-dir", "--model"];
 const saved = { ...process.env };
+let result;
 const reset = () => {
   for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
   Object.assign(process.env, saved);
@@ -688,11 +689,17 @@ assert.deepEqual(detect({ FAKE_AGENT_HELP_OMIT: requiredFlags.join(" ") }).missi
 const oldPath = process.env.PATH; process.env.PATH = "/no-such-agent-path";
 assert.equal(agent.detect().reason, "not_installed"); process.env.PATH = oldPath;
 
+result = run({ PATH: "/no-such-agent-path" });
+assert.equal(result.rc, -1);
+assert.equal(result.spawnError.code, "ENOENT");
+assert.equal(typeof result.spawnError.message, "string");
+assert(result.spawnError.message.length > 0);
+
 const payload = "p".repeat(300_000);
 const arglog = path.join(work, "args.log");
 const inputlog = path.join(work, "input.log");
 const workspaces = path.join(work, "workspaces.log");
-let result = run({ FAKE_AGENT_ARGLOG: arglog, FAKE_AGENT_INPUTLOG: inputlog, FAKE_AGENT_WORKSPACE_LOG: workspaces }, { payload });
+result = run({ FAKE_AGENT_ARGLOG: arglog, FAKE_AGENT_INPUTLOG: inputlog, FAKE_AGENT_WORKSPACE_LOG: workspaces }, { payload });
 assert.equal(result.rc, 0);
 assert.equal(result.output, "STATUS: APPROVED\n\nfake-cursor reply body.");
 assert.equal(fs.readFileSync(inputlog, "utf8"), `review prompt\n\n${payload}`);
@@ -727,7 +734,7 @@ for (const values of [
   { FAKE_AGENT_WRITE_WORKSPACE: "true", FAKE_AGENT_OUTPUT_MODE: "non-json" }
 ]) {
   fs.writeFileSync(workspaces, "");
-  result = run({ ...values, FAKE_AGENT_WORKSPACE_LOG: workspaces }, { timeoutMs: values.FAKE_AGENT_SLEEP ? 20 : 1_000 });
+  result = run({ ...values, FAKE_AGENT_WORKSPACE_LOG: workspaces }, { timeoutMs: values.FAKE_AGENT_SLEEP ? 500 : 1_000 });
   const workspace = fs.readFileSync(workspaces, "utf8").match(/^workspace=(.+)$/m)?.[1];
   assert(workspace); assert.equal(fs.existsSync(workspace), false);
 }
@@ -869,6 +876,27 @@ for failure in missing auth build version empty_version flag; do
     && ok "Cursor $failure detection failure does not fall back" \
     || no "Cursor $failure detection failure has the wrong contract"
 done
+
+SPAWN_ERROR_AGENT_BIN="$WORK/spawn-error-agent-bin"
+mkdir -p "$SPAWN_ERROR_AGENT_BIN"
+ln -s "$TESTS_DIR/bin/agent" "$SPAWN_ERROR_AGENT_BIN/agent"
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+out=$(env PATH="$SPAWN_ERROR_AGENT_BIN:/usr/bin:/bin" \
+  PEER_PRESSURE_TEST_AGENT=peer-pressure-test-agent \
+  FAKE_AGENT_REMOVE_AFTER_HELP=true \
+  FAKE_CODEX_ARGLOG="$CODEX_ARGS" \
+  FAKE_CLAUDE_ARGLOG="$CLAUDE_ARGS" \
+  "$NODE_BIN" "$CLI_JS" consult --peer cursor --model composer --context-file "$QUESTION_CTX" 2>&1)
+printf '%s' "$out" | node -e '
+let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+  const x=JSON.parse(s);
+  if (x.error !== "peer_failed" || x.peer !== "cursor" || x.rc !== -1 ||
+      x.spawnError?.code !== "ENOENT" || typeof x.spawnError.message !== "string" ||
+      x.spawnError.message.length === 0) process.exit(1);
+});' 2>/dev/null \
+  && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+  && ok "Cursor spawn failure preserves diagnostics without default-peer fallback" \
+  || no "Cursor spawn failure lost diagnostics or fell back"
 
 : > "$CURSOR_ARGS"; : > "$CURSOR_INPUT"; : > "$CURSOR_WORKSPACES"
 FAKE_AGENT_IS_ERROR=true FAKE_AGENT_API_ERROR_STATUS=529 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
