@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { parseBundle } from "./lib/bundle.mjs";
 import { writeAllSync } from "./lib/io.mjs";
 import { peerFor, parseStatus, classifyTransient, PayloadTooLargeError } from "./lib/agents/index.mjs";
+import { CURSOR_MODELS } from "./lib/agents/cursor.mjs";
 import { detectHost, HOST_CLAUDE_CODE, HOSTS } from "./lib/host.mjs";
 import { checkTmpWritePreapproved } from "./lib/permissions.mjs";
 import { buildCodePayload, buildCodeSelfCollectPayload } from "./lib/diff.mjs";
@@ -61,8 +62,9 @@ function usage() {
     "",
     "The context file is a single file with fenced sections for the selected command.",
     "",
-    `Global: --host <${HOSTS.join("|")}> overrides host auto-detection (also ADVERSARIAL_REVIEW_HOST).`,
-    "The reviewer is always the agent CLI that is NOT the host: Claude Code -> Codex, Codex -> Claude Code.",
+    `Global: --host <${HOSTS.join("|")}> overrides host auto-detection.`,
+    "Global: --peer cursor selects Cursor as the reviewer and requires --model composer|grok|kimi|glm for consultation and review commands.",
+    "Without --peer, Claude Code uses Codex and Codex uses Claude Code.",
     "Run `detect` first: it reports the host, the peer, and the exact command prefix to use for every later call."
   ].join("\n");
 }
@@ -102,28 +104,39 @@ function requireHost() {
 
 // The peer must be installed AND new enough. An old CLI rejects the flags the
 // backend emits and would otherwise fail as an opaque `peer_failed`.
-function requirePeer(host) {
-  const peer = peerFor(host);
+function peerDetectionError(reason) {
+  return {
+    too_old: "peer_too_old",
+    not_installed: "peer_unavailable",
+    authentication_failed: "authentication_failed",
+    unsupported_build: "unsupported_build",
+    unsupported_version_format: "unsupported_version_format"
+  }[reason] ?? "peer_unavailable";
+}
+
+function requirePeer(host, peerOverride) {
+  const peer = peerFor(host, peerOverride);
   const detection = peer.detect();
   if (!detection.ok) {
     emit({
       ok: false,
-      error: detection.reason === "too_old" ? "peer_too_old" : "peer_unavailable",
+      error: peerDetectionError(detection.reason),
       host,
       peer: peer.id,
       peerName: peer.displayName,
       ...(detection.version ? { version: detection.version } : {}),
       ...(detection.minimum ? { minimum: detection.minimum } : {}),
+      ...(detection.supportedVersion ? { supportedVersion: detection.supportedVersion } : {}),
       ...(detection.missingFlags ? { missingFlags: detection.missingFlags } : {}),
-      setupHints: detection.setupHints
+      ...(detection.setupHints ? { setupHints: detection.setupHints } : {})
     }, 2);
   }
   return { peer, detection };
 }
 
-function runPeer({ promptName, promptSubs, payload, cwd, model }) {
+function runPeer({ promptName, promptSubs, payload, cwd, model, peerOverride }) {
   const { host } = requireHost();
-  const { peer } = requirePeer(host);
+  const { peer } = requirePeer(host, peerOverride);
 
   let result;
   try {
@@ -141,6 +154,28 @@ function runPeer({ promptName, promptSubs, payload, cwd, model }) {
   }
 
   if (result.rc !== 0) {
+    const diagnostics = result.cleanupError ? { cleanupError: result.cleanupError } : {};
+    if (result.outputTooLarge) {
+      emit({
+        ok: false, error: "peer_output_too_large", peer: peer.id, rc: result.rc,
+        stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
+      }, 3);
+    }
+    if (result.modelRejected) {
+      emit({
+        ok: false, error: "cursor_model_unavailable", peer: peer.id, rc: result.rc,
+        modelAlias: result.modelAlias, modelId: result.modelId,
+        modelListCommand: result.modelListCommand,
+        stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
+      }, 3);
+    }
+    if (result.timedOut) {
+      emit({
+        ok: false, error: "peer_failed", peer: peer.id, rc: result.rc, timedOut: true,
+        ...(result.apiErrorStatus ? { apiErrorStatus: result.apiErrorStatus } : {}),
+        stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
+      }, 3);
+    }
     // A momentarily saturated provider is worth exactly one more attempt, and
     // the skill cannot tell that from a genuine failure by reading prose. Say so
     // explicitly so the retry is a contract rather than a guess.
@@ -155,22 +190,32 @@ function runPeer({ promptName, promptSubs, payload, cwd, model }) {
             retryInstruction: "rerun_same_command_once"
           }
         : {}),
-      stderr: result.stderr, stdout: result.stdout, output: result.output
+      stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
     }, 3);
   }
-  return { output: result.output, peer };
+  return {
+    output: result.output,
+    peer,
+    ...(result.cleanupError ? { cleanupError: result.cleanupError } : {})
+  };
 }
 
 function runReview(options) {
-  const { output, peer } = runPeer(options);
+  const result = runPeer(options);
+  const { output, peer } = result;
   const status = parseStatus(output, REVIEW_STATUSES);
-  if (!status) emit({ ok: false, error: "missing_status_line", peer: peer.id, output }, 4);
-  return { status, output, peer };
+  if (!status) {
+    emit({
+      ok: false, error: "missing_status_line", peer: peer.id, output,
+      ...(result.cleanupError ? { cleanupError: result.cleanupError } : {})
+    }, 4);
+  }
+  return { ...result, status };
 }
 
-function cmdDetect() {
+function cmdDetect(peerOverride) {
   const h = requireHost();
-  const peer = peerFor(h.host);
+  const peer = peerFor(h.host, peerOverride);
   const d = peer.detect();
   emit({
     ok: d.ok,
@@ -184,11 +229,12 @@ function cmdDetect() {
     ...(d.ok
       ? { version: d.version, versionCheck: d.versionCheck, minimum: d.minimum }
       : {
-          error: d.reason === "too_old" ? "peer_too_old" : "peer_unavailable",
+          error: peerDetectionError(d.reason),
           ...(d.version ? { version: d.version } : {}),
           ...(d.minimum ? { minimum: d.minimum } : {}),
+          ...(d.supportedVersion ? { supportedVersion: d.supportedVersion } : {}),
           ...(d.missingFlags ? { missingFlags: d.missingFlags } : {}),
-          setupHints: d.setupHints
+          ...(d.setupHints ? { setupHints: d.setupHints } : {})
         }),
     reviewConfinement: peer.confinement(),
     // Claude Code prompts the host before it writes the review context file to
@@ -235,7 +281,15 @@ function cmdInspectRepo() {
   });
 }
 
-function cmdPlanReview(argv) {
+function validateCursorModel(peerOverride, model) {
+  if (peerOverride !== "cursor") return;
+  const accepted = Object.keys(CURSOR_MODELS);
+  if (!model || !Object.hasOwn(CURSOR_MODELS, model)) {
+    die(`--model ${accepted.join("|")} is required with --peer cursor`);
+  }
+}
+
+function cmdPlanReview(argv, peerOverride) {
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -245,6 +299,7 @@ function cmdPlanReview(argv) {
     },
     allowPositionals: false
   });
+  validateCursorModel(peerOverride, values.model);
   if (!values["context-file"]) die("--context-file PATH is required");
 
   const bundle = parseBundle(readFileIf(values["context-file"]), ["PLAN", "UNRESOLVED FINDINGS", "LATEST FIXES"]);
@@ -260,16 +315,17 @@ function cmdPlanReview(argv) {
     "===== END LATEST FIXES ====="
   ].join("\n") + "\n";
 
-  const { status, output } = runReview({
+  const { status, output, cleanupError } = runReview({
     promptName: "plan-review",
     promptSubs: { REPO_RESTRICTION: "Review ONLY the stdin payload. Do not read files from the repository." },
     payload,
-    model: values.model
+    model: values.model,
+    peerOverride
   });
-  emit({ ok: true, status, output });
+  emit({ ok: true, status, output, ...(cleanupError ? { cleanupError } : {}) });
 }
 
-function cmdCodeReview(argv) {
+function cmdCodeReview(argv, peerOverride) {
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -288,6 +344,7 @@ function cmdCodeReview(argv) {
     },
     allowPositionals: false
   });
+  validateCursorModel(peerOverride, values.model);
 
   if (!["uncommitted", "staged", "branch"].includes(values.mode)) {
     die("--mode uncommitted|staged|branch is required");
@@ -395,7 +452,7 @@ function cmdCodeReview(argv) {
     ? "\n\n<repo_collection_rules>\nFor this code review, the stdin payload is a compact review target, not the full diff. Inspect the repository and relevant git state directly before finalizing findings. Use the payload to understand the intended review scope, changed-file snapshot, and iteration context. Stay within the requested review target and explicit path scope if one was provided. Do not inspect known secret-bearing files unless the review explicitly opted into them. Prefer reading the affected files, related call sites, and targeted diffs yourself over asking for more payload.\n</repo_collection_rules>"
     : "";
 
-  const { status, output } = runReview({
+  const { status, output, cleanupError } = runReview({
     promptName: "code-review",
     promptSubs: {
       REPO_RESTRICTION: repoContext
@@ -405,9 +462,10 @@ function cmdCodeReview(argv) {
     },
     payload,
     cwd: repoContext ? root : undefined,
-    model: values.model
+    model: values.model,
+    peerOverride
   });
-  emit({ ok: true, status, output, skipped });
+  emit({ ok: true, status, output, skipped, ...(cleanupError ? { cleanupError } : {}) });
 }
 
 function hasRecommendationLine(output) {
@@ -417,7 +475,7 @@ function hasRecommendationLine(output) {
   return /^(?:\*\*|__|\*|_|`)?recommendation(?:\*\*|__|\*|_|`)?\s*:\s*(?:\*\*|__|\*|_|`)?/i.test(first);
 }
 
-function cmdConsult(argv) {
+function cmdConsult(argv, peerOverride) {
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -426,6 +484,7 @@ function cmdConsult(argv) {
     },
     allowPositionals: false
   });
+  validateCursorModel(peerOverride, values.model);
   if (!values["context-file"]) die("--context-file PATH is required");
 
   const bundle = parseBundle(
@@ -443,34 +502,51 @@ function cmdConsult(argv) {
     `===== ${label} START =====`, body, `===== ${label} END =====`
   ]).join("\n") + "\n";
 
-  const { output, peer } = runPeer({
+  const { output, peer, cleanupError } = runPeer({
     promptName: "consult",
     payload,
-    model: values.model
+    model: values.model,
+    peerOverride
   });
   if (!hasRecommendationLine(output)) {
-    emit({ ok: false, error: "missing_recommendation_line", peer: peer.id, output }, 4);
+    emit({
+      ok: false, error: "missing_recommendation_line", peer: peer.id, output,
+      ...(cleanupError ? { cleanupError } : {})
+    }, 4);
   }
-  emit({ ok: true, peer: peer.id, output });
+  emit({ ok: true, peer: peer.id, output, ...(cleanupError ? { cleanupError } : {}) });
 }
 
 // `--host` is global rather than per-subcommand: it answers "who is driving
 // this run", which is orthogonal to what the subcommand does. Strip it before
 // dispatch so no subcommand parser has to declare it.
-function extractHostFlag(argv) {
+function extractGlobalFlags(argv) {
   const out = [];
   let host;
+  let peer;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--host") { host = argv[++i]; continue; }
     if (a?.startsWith("--host=")) { host = a.slice("--host=".length); continue; }
+    if (a === "--peer") {
+      peer = argv[++i];
+      if (!peer) die("--peer cursor is required");
+      continue;
+    }
+    if (a?.startsWith("--peer=")) {
+      peer = a.slice("--peer=".length);
+      if (!peer) die("--peer cursor is required");
+      continue;
+    }
     out.push(a);
   }
-  return { host, argv: out };
+  if (peer !== undefined && peer !== "cursor") die(`unknown peer '${peer}'`);
+  return { host, peer, argv: out };
 }
 
-const cli = extractHostFlag(process.argv.slice(2));
+const cli = extractGlobalFlags(process.argv.slice(2));
 const HOST_OVERRIDE = cli.host;
+const PEER_OVERRIDE = cli.peer;
 const [sub, ...rest] = cli.argv;
 try {
   dispatch(sub, rest);
@@ -494,12 +570,12 @@ switch (sub) {
   case "--help":
     process.stdout.write(usage() + "\n");
     break;
-  case "detect": cmdDetect(); break;
+  case "detect": cmdDetect(PEER_OVERRIDE); break;
   case "inspect-repo": cmdInspectRepo(); break;
   case "new-ctx": cmdNewCtx(rest); break;
-  case "plan-review": cmdPlanReview(rest); break;
-  case "code-review": cmdCodeReview(rest); break;
-  case "consult": cmdConsult(rest); break;
+  case "plan-review": cmdPlanReview(rest, PEER_OVERRIDE); break;
+  case "code-review": cmdCodeReview(rest, PEER_OVERRIDE); break;
+  case "consult": cmdConsult(rest, PEER_OVERRIDE); break;
   default: die(`unknown subcommand '${sub}'\n\n${usage()}`);
 }
 }

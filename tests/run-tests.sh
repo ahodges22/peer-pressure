@@ -722,6 +722,140 @@ cursor_contract_rc=$?
 [ "$cursor_contract_rc" -eq 0 ] \
   && ok "Cursor backend detection and run contracts" || no "Cursor backend detection or run contract"
 
+# --------------------------------------------------------- Cursor peer override
+group "Cursor peer override"
+CURSOR_VERSION="2026.08.04-aaa8809"
+CURSOR_ARGS="$WORK/cursor-runtime-args.log"
+CURSOR_INPUT="$WORK/cursor-runtime-input.log"
+CURSOR_WORKSPACES="$WORK/cursor-runtime-workspaces.log"
+CODEX_ARGS="$WORK/cursor-runtime-codex.log"
+CLAUDE_ARGS="$WORK/cursor-runtime-claude.log"
+NODE_BIN="$(command -v node)"
+: > "$CURSOR_ARGS"; : > "$CURSOR_INPUT"; : > "$CURSOR_WORKSPACES"
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+
+QUESTION_CTX="$WORK/cursor-question.txt"
+PLAN_CTX="$WORK/cursor-plan.txt"
+printf '===== QUESTION START =====\nUse Redis or the database?\n===== QUESTION END =====\n' > "$QUESTION_CTX"
+printf '===== PLAN START =====\nship the thing\n===== PLAN END =====\n' > "$PLAN_CTX"
+R=$(newrepo cursor-runtime); cd "$R"
+printf 'changed\n' >> seed.txt
+
+cursor_cli(){
+  env PEER_PRESSURE_TEST_AGENT=peer-pressure-test-agent \
+    FAKE_AGENT_ARGLOG="$CURSOR_ARGS" \
+    FAKE_AGENT_INPUTLOG="$CURSOR_INPUT" \
+    FAKE_AGENT_WORKSPACE_LOG="$CURSOR_WORKSPACES" \
+    FAKE_CODEX_ARGLOG="$CODEX_ARGS" \
+    FAKE_CLAUDE_ARGLOG="$CLAUDE_ARGS" \
+    node "$CLI_JS" "$@" 2>&1
+}
+
+cursor_cli detect --peer cursor | grep -q '"host": "claude-code"' \
+  && cursor_cli detect --peer cursor | grep -q '"peer": "cursor"' \
+  && cursor_cli detect --peer cursor | grep -q "\"version\": \"$CURSOR_VERSION\"" \
+  && cursor_cli detect --peer cursor | grep -q '"sandbox": "ask-mode"' \
+  && ok "detect selects Cursor with its version and confinement" \
+  || no "detect does not report the Cursor reviewer contract"
+
+env ADVERSARIAL_REVIEW_HOST=claude-code node "$CLI_JS" detect 2>&1 | grep -q '"peer": "codex"' \
+  && ok "default Claude Code host still selects Codex" \
+  || no "Claude Code default reviewer changed"
+env ADVERSARIAL_REVIEW_HOST=codex node "$CLI_JS" detect 2>&1 | grep -q '"peer": "claude"' \
+  && ok "default Codex host still selects Claude" \
+  || no "Codex default reviewer changed"
+
+cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"peer": "cursor"' \
+  && ok "consult accepts the composer Cursor alias" || no "consult rejects composer"
+cursor_cli plan-review --peer cursor --model grok --context-file "$PLAN_CTX" --first \
+  | grep -q '"status": "APPROVED"' \
+  && ok "plan review accepts the grok Cursor alias" || no "plan review rejects grok"
+cursor_cli code-review --peer cursor --model kimi --mode uncommitted --first \
+  | grep -q '"status": "APPROVED"' \
+  && ok "payload-only code review accepts the kimi Cursor alias" || no "code review rejects kimi"
+payload_input=$(cat "$CURSOR_INPUT")
+case "$payload_input" in
+  *"Repository root:"*) no "payload-only commands expose a repository root" ;;
+  *) ok "payload-only commands expose no repository root" ;;
+esac
+cursor_cli code-review --peer cursor --model glm --mode uncommitted --repo-context --first \
+  | grep -q '"status": "APPROVED"' \
+  && ok "repository code review accepts the glm Cursor alias" || no "repository review rejects glm"
+
+for alias_and_id in \
+  'composer composer-2.5' \
+  'grok cursor-grok-4.5-high' \
+  'kimi kimi-k3-max' \
+  'glm glm-5.2-max'
+do
+  alias=${alias_and_id%% *}
+  model_id=${alias_and_id#* }
+  grep -q "arg=$model_id" "$CURSOR_ARGS" \
+    && ok "Cursor alias $alias maps to $model_id" || no "Cursor alias $alias did not map to $model_id"
+done
+
+repo_root=$(cd "$R" && pwd -P)
+grep -q "arg=$repo_root" "$CURSOR_ARGS" \
+  && grep -q "Repository root: $repo_root" "$CURSOR_INPUT" \
+  && ok "repository context passes the absolute root to Cursor" \
+  || no "repository context does not pass the absolute root"
+
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+cursor_cli consult --peer cursor --context-file "$QUESTION_CTX" | grep -q '"error": "invalid_usage"' \
+  && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+  && ok "missing Cursor alias invokes no default peer" || no "missing Cursor alias contract is wrong"
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+cursor_cli consult --peer cursor --model unknown --context-file "$QUESTION_CTX" | grep -q 'composer|grok|kimi|glm' \
+  && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+  && ok "unknown Cursor alias invokes no default peer" || no "unknown Cursor alias contract is wrong"
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+cursor_cli detect --peer nope | grep -q '"error": "invalid_usage"' \
+  && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+  && ok "unknown explicit peer is invalid usage without fallback" || no "unknown explicit peer contract is wrong"
+
+for failure in missing auth build version flag; do
+  : > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+  case "$failure" in
+    missing) out=$(PATH="/usr/bin:/bin" "$NODE_BIN" "$CLI_JS" detect --peer cursor 2>&1) ; expected='"error": "peer_unavailable"' ;;
+    auth) out=$(FAKE_AGENT_VERSION_RC=1 cursor_cli detect --peer cursor) ; expected='"error": "authentication_failed"' ;;
+    build) out=$(FAKE_AGENT_VERSION=2026.08.03-aaa8809 cursor_cli detect --peer cursor) ; expected='"error": "unsupported_build"' ;;
+    version) out=$(FAKE_AGENT_VERSION=nightly cursor_cli detect --peer cursor) ; expected='"error": "unsupported_version_format"' ;;
+    flag) out=$(FAKE_AGENT_HELP_OMIT=--mode cursor_cli detect --peer cursor) ; expected='"missingFlags"' ;;
+  esac
+  printf '%s' "$out" | grep -q "$expected" \
+    && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+    && ok "Cursor $failure detection failure does not fall back" \
+    || no "Cursor $failure detection failure has the wrong contract"
+done
+
+: > "$CURSOR_ARGS"; : > "$CURSOR_INPUT"; : > "$CURSOR_WORKSPACES"
+FAKE_AGENT_IS_ERROR=true FAKE_AGENT_API_ERROR_STATUS=529 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"retryable": true' \
+  && ok "Cursor transient failure is retryable" || no "Cursor transient failure is not retryable"
+first_input=$(cat "$CURSOR_INPUT")
+FAKE_AGENT_STATUS='RECOMMENDATION: Use the database' cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"ok": true' \
+  && [ "$first_input" = "$(cat "$CURSOR_INPUT")" ] \
+  && [ "$(grep -c '^arg=composer-2.5$' "$CURSOR_ARGS")" -eq 2 ] \
+  && [ "$(grep '^workspace=' "$CURSOR_WORKSPACES" | sort -u | wc -l | tr -d ' ')" -eq 2 ] \
+  && ok "Cursor retry preserves stdin and alias in a fresh workspace" \
+  || no "Cursor retry does not preserve the request safely"
+
+FAKE_AGENT_OUTPUT_BYTES=34000000 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"error": "peer_output_too_large"' \
+  && ok "Cursor oversized output has its own terminal error" \
+  || no "Cursor oversized output error is wrong"
+FAKE_AGENT_OUTPUT_BYTES=34000000 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"retryable"' \
+  && no "Cursor oversized output is retryable" || ok "Cursor oversized output is terminal"
+FAKE_AGENT_MODEL_REJECT=true cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"error": "cursor_model_unavailable"' \
+  && ok "Cursor model rejection has its own error" || no "Cursor model rejection error is wrong"
+FAKE_AGENT_MODEL_REJECT=true cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"modelId": "cursor-grok-4.5-high"' \
+  && ok "Cursor model rejection reports alias mapping" || no "Cursor model rejection lacks mapping"
+
 # ---------------------------------------------------------- plan-mode hook
 group "plan-mode hook"
 # The hook shipped with no execution coverage at all: CI only linted it. Its
