@@ -161,6 +161,13 @@ function runPeer({ promptName, promptSubs, payload, cwd, model, peerOverride }) 
         stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
       }, 3);
     }
+    if (result.strictJsonFailure) {
+      emit({
+        ok: false, error: "peer_failed", peer: peer.id, rc: result.rc,
+        strictJsonFailure: true,
+        stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
+      }, 3);
+    }
     if (result.modelRejected) {
       emit({
         ok: false, error: "cursor_model_unavailable", peer: peer.id, rc: result.rc,
@@ -531,16 +538,17 @@ function extractGlobalFlags(argv) {
     if (a === "--peer") {
       peer = argv[++i];
       if (!peer) die("--peer cursor is required");
+      if (peer !== "cursor") die(`unknown peer '${peer}'`);
       continue;
     }
     if (a?.startsWith("--peer=")) {
       peer = a.slice("--peer=".length);
       if (!peer) die("--peer cursor is required");
+      if (peer !== "cursor") die(`unknown peer '${peer}'`);
       continue;
     }
     out.push(a);
   }
-  if (peer !== undefined && peer !== "cursor") die(`unknown peer '${peer}'`);
   return { host, peer, argv: out };
 }
 

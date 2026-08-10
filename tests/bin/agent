@@ -67,6 +67,7 @@ if [ "${FAKE_AGENT_WRITE_WORKSPACE:-false}" = "true" ] && [ -n "$workspace" ]; t
 fi
 
 if [ -n "${FAKE_AGENT_SLEEP:-}" ]; then sleep "$FAKE_AGENT_SLEEP"; fi
+if [ "${FAKE_AGENT_SELF_KILL:-false}" = "true" ]; then kill -KILL "$$"; fi
 
 if [ "${FAKE_AGENT_MODEL_REJECT:-false}" = "true" ]; then
   printf 'model not available: %s\n' "$model" >&2
@@ -89,7 +90,7 @@ case "${FAKE_AGENT_OUTPUT_MODE:-json}" in
       printf '{"type":"result","subtype":"success","is_error":%s,"result":"%s\\n\\nfake-cursor reply body.","session_id":"stub"}\n' "$is_error" "$status"
     fi
     ;;
-  non-json) printf 'not JSON\n' ;;
+  non-json) printf '%s\n' "${FAKE_AGENT_NON_JSON_OUTPUT:-not JSON}" ;;
   prefixed-json) printf 'notice: {"result":"not accepted"}\n' ;;
   missing-result) printf '{"type":"result","is_error":false,"session_id":"stub"}\n' ;;
   empty-result) printf '{"type":"result","is_error":false,"result":"","session_id":"stub"}\n' ;;

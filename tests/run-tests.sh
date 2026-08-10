@@ -757,6 +757,9 @@ cursor_cli detect --peer cursor | grep -q '"host": "claude-code"' \
   && cursor_cli detect --peer cursor | grep -q '"sandbox": "ask-mode"' \
   && ok "detect selects Cursor with its version and confinement" \
   || no "detect does not report the Cursor reviewer contract"
+cursor_cli detect --peer=cursor | grep -q '"peer": "cursor"' \
+  && ok "equals-form Cursor peer selection works" \
+  || no "equals-form Cursor peer selection is rejected"
 
 env ADVERSARIAL_REVIEW_HOST=claude-code node "$CLI_JS" detect 2>&1 | grep -q '"peer": "codex"' \
   && ok "default Claude Code host still selects Codex" \
@@ -813,11 +816,19 @@ cursor_cli consult --peer cursor --model unknown --context-file "$QUESTION_CTX" 
 cursor_cli detect --peer nope | grep -q '"error": "invalid_usage"' \
   && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
   && ok "unknown explicit peer is invalid usage without fallback" || no "unknown explicit peer contract is wrong"
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+cursor_cli detect --peer nope --peer cursor | grep -q '"error": "invalid_usage"' \
+  && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+  && ok "every explicit peer value is validated" || no "an earlier invalid peer can be hidden"
 
+MISSING_AGENT_BIN="$WORK/missing-agent-bin"
+mkdir -p "$MISSING_AGENT_BIN"
+ln -s "$TESTS_DIR/bin/codex" "$MISSING_AGENT_BIN/codex"
+ln -s "$TESTS_DIR/bin/claude" "$MISSING_AGENT_BIN/claude"
 for failure in missing auth build version flag; do
   : > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
   case "$failure" in
-    missing) out=$(PATH="/usr/bin:/bin" "$NODE_BIN" "$CLI_JS" detect --peer cursor 2>&1) ; expected='"error": "peer_unavailable"' ;;
+    missing) out=$(env PATH="$MISSING_AGENT_BIN:/usr/bin:/bin" PEER_PRESSURE_TEST_AGENT=peer-pressure-test-agent FAKE_CODEX_ARGLOG="$CODEX_ARGS" FAKE_CLAUDE_ARGLOG="$CLAUDE_ARGS" "$NODE_BIN" "$CLI_JS" detect --peer cursor 2>&1) ; expected='"error": "peer_unavailable"' ;;
     auth) out=$(FAKE_AGENT_VERSION_RC=1 cursor_cli detect --peer cursor) ; expected='"error": "authentication_failed"' ;;
     build) out=$(FAKE_AGENT_VERSION=2026.08.03-aaa8809 cursor_cli detect --peer cursor) ; expected='"error": "unsupported_build"' ;;
     version) out=$(FAKE_AGENT_VERSION=nightly cursor_cli detect --peer cursor) ; expected='"error": "unsupported_version_format"' ;;
@@ -849,6 +860,18 @@ FAKE_AGENT_OUTPUT_BYTES=34000000 cursor_cli consult --peer cursor --model compos
 FAKE_AGENT_OUTPUT_BYTES=34000000 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
   | grep -q '"retryable"' \
   && no "Cursor oversized output is retryable" || ok "Cursor oversized output is terminal"
+FAKE_AGENT_SELF_KILL=true cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"timedOut": true' \
+  && ok "Cursor timeout is reported as terminal" || no "Cursor timeout is not reported"
+FAKE_AGENT_SELF_KILL=true cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"retryable"' \
+  && no "Cursor timeout is retryable" || ok "Cursor timeout has no retry metadata"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='rate limit' cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"retryable"' \
+  && no "Cursor strict JSON failure is retryable" || ok "Cursor strict JSON failure is terminal"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='rate limit' cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"strictJsonFailure": true' \
+  && ok "Cursor strict JSON failure is identified" || no "Cursor strict JSON failure is not identified"
 FAKE_AGENT_MODEL_REJECT=true cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
   | grep -q '"error": "cursor_model_unavailable"' \
   && ok "Cursor model rejection has its own error" || no "Cursor model rejection error is wrong"

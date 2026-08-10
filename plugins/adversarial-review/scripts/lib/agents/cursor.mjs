@@ -173,6 +173,7 @@ export const agent = {
         (processResult.error?.code === "ETIMEDOUT" || Boolean(processResult.signal));
       let output = stdout;
       let apiErrorStatus;
+      let strictJsonFailure = false;
 
       if (rc === 0 && !processResult.error) {
         try {
@@ -180,6 +181,7 @@ export const agent = {
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
               typeof parsed.result !== "string" || parsed.result.length === 0) {
             rc = 1;
+            strictJsonFailure = true;
           } else {
             output = parsed.result;
             if (parsed.is_error === true) {
@@ -189,6 +191,7 @@ export const agent = {
           }
         } catch {
           rc = 1;
+          strictJsonFailure = true;
         }
       }
 
@@ -200,6 +203,7 @@ export const agent = {
         stdout,
         stderr,
         timedOut,
+        ...(strictJsonFailure ? { strictJsonFailure: true } : {}),
         ...(apiErrorStatus !== undefined ? { apiErrorStatus } : {}),
         ...(outputTooLarge ? { outputTooLarge: true } : {}),
         ...(modelRejected
