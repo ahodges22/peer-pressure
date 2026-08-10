@@ -606,6 +606,121 @@ if (bad.length) { console.log(bad.join(" ")); process.exit(1); }
 ' >/dev/null 2>&1 && ok "status classification: 4 transient, 5 terminal, rc0 ignored" \
   || no "classifyTransient regression"
 
+# -------------------------------------------------------------- cursor backend
+group "cursor backend"
+export PEER_PRESSURE_TEST_AGENT=peer-pressure-test-agent
+expected_agent="$TESTS_DIR/bin/agent"
+[ "$(command -v agent)" = "$expected_agent" ] || exit 1
+[ "$(agent --fixture-id)" = "peer-pressure-test-agent" ] || exit 1
+
+CURSOR_MODULE="$REPO_ROOT/plugins/adversarial-review/scripts/lib/agents/cursor.mjs"
+FAKE_AGENT_ROOT="$WORK/cursor-contract"
+mkdir -p "$FAKE_AGENT_ROOT"
+CURSOR_MODULE="$CURSOR_MODULE" FAKE_AGENT_ROOT="$FAKE_AGENT_ROOT" node --input-type=module <<'EOF'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const modulePath = process.env.CURSOR_MODULE;
+const work = process.env.FAKE_AGENT_ROOT;
+const { agent, CURSOR_MODELS, SUPPORTED_CURSOR_VERSION } = await import(modulePath);
+const requiredFlags = ["--print", "--output-format", "--mode", "--sandbox", "--trust", "--workspace", "--add-dir", "--model"];
+const saved = { ...process.env };
+const reset = () => {
+  for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+  Object.assign(process.env, saved);
+};
+const detect = (values = {}) => {
+  reset(); Object.assign(process.env, values); return agent.detect();
+};
+const run = (values = {}, options = {}) => {
+  reset(); Object.assign(process.env, values);
+  return agent.run({ prompt: "review prompt", payload: "payload", model: "composer", timeoutMs: 1_000, ...options });
+};
+
+assert.equal(SUPPORTED_CURSOR_VERSION, "2026.08.04-aaa8809");
+assert.deepEqual(CURSOR_MODELS, { composer: "composer-2.5", grok: "cursor-grok-4.5-high", kimi: "kimi-k3-max", glm: "glm-5.2-max" });
+assert(Object.isFrozen(CURSOR_MODELS));
+assert.equal(agent.id, "cursor");
+assert.equal(agent.command, "agent");
+assert.equal(detect({ FAKE_AGENT_VERSION: SUPPORTED_CURSOR_VERSION }).ok, true);
+for (const version of ["2026.08.03-aaa8809", "2026.08.05-aaa8809", "2026.08.04-wrong", "2026.08.04"]) {
+  const result = detect({ FAKE_AGENT_VERSION: version });
+  assert.equal(result.reason, "unsupported_build");
+  assert.equal(result.version, version);
+  assert.equal(result.supportedVersion, SUPPORTED_CURSOR_VERSION);
+  assert.deepEqual(result.setupHints, ["agent install 2026.08.04-aaa8809"]);
+}
+assert.equal(detect({ FAKE_AGENT_VERSION: "nightly" }).reason, "unsupported_version_format");
+assert.equal(detect({ FAKE_AGENT_VERSION_RC: "1" }).reason, "authentication_failed");
+assert.deepEqual(detect({ FAKE_AGENT_HELP_OMIT: "--mode" }).missingFlags, ["--mode"]);
+assert.deepEqual(detect({ FAKE_AGENT_HELP_OMIT: requiredFlags.join(" ") }).missingFlags, requiredFlags);
+const oldPath = process.env.PATH; process.env.PATH = "/no-such-agent-path";
+assert.equal(agent.detect().reason, "not_installed"); process.env.PATH = oldPath;
+
+const payload = "p".repeat(300_000);
+const arglog = path.join(work, "args.log");
+const inputlog = path.join(work, "input.log");
+const workspaces = path.join(work, "workspaces.log");
+let result = run({ FAKE_AGENT_ARGLOG: arglog, FAKE_AGENT_INPUTLOG: inputlog, FAKE_AGENT_WORKSPACE_LOG: workspaces }, { payload });
+assert.equal(result.rc, 0);
+assert.equal(result.output, "STATUS: APPROVED\n\nfake-cursor reply body.");
+assert.equal(fs.readFileSync(inputlog, "utf8"), `review prompt\n\n${payload}`);
+const args = fs.readFileSync(arglog, "utf8").trim().split("\n").filter((line) => line.startsWith("arg=")).map((line) => line.slice(4));
+const workspace = args[args.indexOf("--workspace") + 1];
+assert.deepEqual(args, [
+  "--print", "--output-format", "json", "--mode", "ask", "--sandbox", "enabled", "--trust",
+  "--disable-project-configs", "--exclude-workspace-context", "--disable-auto-update",
+  "--workspace", workspace, "--model", "composer-2.5"
+]);
+assert.equal(fs.readFileSync(workspaces, "utf8").match(/^entries=$/m)?.[0], "entries=");
+assert(!args.includes("review prompt"));
+
+const repo = path.join(work, "repo"); fs.mkdirSync(repo);
+fs.writeFileSync(arglog, ""); fs.writeFileSync(inputlog, "");
+result = run({ FAKE_AGENT_ARGLOG: arglog, FAKE_AGENT_INPUTLOG: inputlog }, { cwd: repo, prompt: "repo prompt", payload: "repo payload" });
+assert.equal(result.rc, 0);
+const repoArgs = fs.readFileSync(arglog, "utf8").split("\n").filter((line) => line.startsWith("arg=")).map((line) => line.slice(4));
+assert.deepEqual(repoArgs.slice(repoArgs.indexOf("--add-dir"), repoArgs.indexOf("--add-dir") + 2), ["--add-dir", path.resolve(repo)]);
+assert.equal(fs.readFileSync(inputlog, "utf8"), `Repository root: ${path.resolve(repo)}\nResolve every relative payload path against this root.\n\nrepo prompt\n\nrepo payload`);
+
+fs.writeFileSync(workspaces, "");
+run({ FAKE_AGENT_WORKSPACE_LOG: workspaces }); run({ FAKE_AGENT_WORKSPACE_LOG: workspaces });
+const paths = fs.readFileSync(workspaces, "utf8").split("\n").filter((line) => line.startsWith("workspace=")).map((line) => line.slice(10));
+assert.equal(paths.length, 2); assert.notEqual(paths[0], paths[1]);
+for (const workspace of paths) { assert(workspace.startsWith(os.tmpdir())); assert.equal(fs.existsSync(workspace), false); }
+for (const values of [
+  { FAKE_AGENT_WRITE_WORKSPACE: "true" },
+  { FAKE_AGENT_WRITE_WORKSPACE: "true", FAKE_AGENT_RC: "7" },
+  { FAKE_AGENT_WRITE_WORKSPACE: "true", FAKE_AGENT_SLEEP: "2" },
+  { FAKE_AGENT_WRITE_WORKSPACE: "true", FAKE_AGENT_OUTPUT_MODE: "non-json" }
+]) {
+  fs.writeFileSync(workspaces, "");
+  result = run({ ...values, FAKE_AGENT_WORKSPACE_LOG: workspaces }, { timeoutMs: values.FAKE_AGENT_SLEEP ? 20 : 1_000 });
+  const workspace = fs.readFileSync(workspaces, "utf8").match(/^workspace=(.+)$/m)?.[1];
+  assert(workspace); assert.equal(fs.existsSync(workspace), false);
+}
+result = run({ FAKE_AGENT_IS_ERROR: "true", FAKE_AGENT_API_ERROR_STATUS: "529" });
+assert.notEqual(result.rc, 0); assert.equal(result.apiErrorStatus, 529);
+for (const mode of ["non-json", "prefixed-json", "missing-result", "empty-result"]) assert.notEqual(run({ FAKE_AGENT_OUTPUT_MODE: mode }).rc, 0);
+assert.equal(run({ FAKE_AGENT_RC: "9", FAKE_AGENT_OUTPUT_MODE: "non-json" }).rc, 9);
+result = run({ FAKE_AGENT_OUTPUT_BYTES: "34000000" }, { timeoutMs: 10_000 });
+assert.notEqual(result.rc, 0); assert.equal(result.outputTooLarge, true); assert.equal(result.timedOut, false);
+result = run({ FAKE_AGENT_MODEL_REJECT: "true" }, { model: "grok" });
+assert.equal(result.modelRejected, true); assert.equal(result.modelAlias, "grok");
+assert.equal(result.modelId, "cursor-grok-4.5-high"); assert.equal(result.modelListCommand, "agent --list-models");
+
+const rmSync = fs.rmSync; fs.rmSync = () => { throw new Error("cleanup denied"); };
+try {
+  result = run(); assert.equal(result.rc, 0); assert.match(result.cleanupError, /cleanup denied/);
+} finally { fs.rmSync = rmSync; }
+reset();
+EOF
+cursor_contract_rc=$?
+[ "$cursor_contract_rc" -eq 0 ] \
+  && ok "Cursor backend detection and run contracts" || no "Cursor backend detection or run contract"
+
 # ---------------------------------------------------------- plan-mode hook
 group "plan-mode hook"
 # The hook shipped with no execution coverage at all: CI only linted it. Its

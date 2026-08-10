@@ -2,9 +2,10 @@
 
 import { agent as codex } from "./codex.mjs";
 import { agent as claude } from "./claude.mjs";
+import { agent as cursor } from "./cursor.mjs";
 import { peerIdFor } from "../host.mjs";
 
-const AGENTS = { codex, claude };
+const AGENTS = { codex, claude, cursor };
 
 export function getAgent(id) {
   const a = AGENTS[id];
