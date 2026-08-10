@@ -20,6 +20,8 @@ Out of scope:
 
 - Multi-model panels or arbitrary Cursor model IDs.
 - Cursor as a host or default reviewer.
+- Proving that repository Cursor rules, skills, notes, transcripts, or MCP
+  configuration are isolated from repository-context reviews.
 - Release-version changes.
 - Unrelated refactoring.
 
@@ -81,9 +83,10 @@ Cursor detection runs `agent --version` and probes `agent --help`
 for every option used by the backend. The probe requires `--print`,
 `--output-format`, `--mode`, `--sandbox`, `--trust`, `--workspace`, `--add-dir`,
 and `--model`. Support only the full Cursor CLI version
-`2026.08.04-aaa8809` because that is the installed build whose stdin,
-configuration isolation, trust, and MCP paths were inspected and will be
-smoke-tested. Any other version is untested, not assumed compatible.
+`2026.08.04-aaa8809` because that is the installed build whose stdin, trust,
+and configuration-control paths were inspected and whose functional behavior
+will be smoke-tested. This pin does not guarantee repository-configuration
+isolation. Any other version is untested, not assumed compatible.
 
 Parse only the first version-output line with
 `^(\d{4})\.(\d{2})\.(\d{2})(?:-([0-9A-Za-z.-]+))?$`. Compare the numeric
@@ -97,19 +100,25 @@ in the current CLI source. It never suggests `agent update` for a version
 mismatch. Authentication failures can still suggest `agent login`.
 
 The backend also passes the build-verified hidden options
-`--disable-project-configs`, `--exclude-workspace-context`, and
-`--disable-auto-update`. The first prevents
+`--disable-project-configs` and `--disable-auto-update`. The first prevents
 project `.cursor/cli.json` configuration from changing the invocation. The
-second strips workspace rules, skills, transcripts, and notes from the session.
-The third prevents a review invocation from updating itself past the supported
+second prevents a review invocation from updating itself past the supported
 version. These hidden options are covered by exact-version matching and the
 required real-CLI smoke check rather than the public-help probe.
+
+The backend does not pass `--exclude-workspace-context`. A paid smoke attempt
+with the supported build reached the Cursor service but failed before model
+execution because workspace-context exclusion was not allowed for the current
+user, team, or selected model. Local build detection cannot predict that
+server-side entitlement. Cursor support therefore uses the weaker boundary
+described below instead of requiring an option that makes every invocation fail
+for this account.
 
 The inspected CLI rejects unknown options with a nonzero exit before model
 execution. Therefore removal or renaming of either hidden option produces a
 loud `peer_failed` result even after detection. Exact release-date matching
 prevents a future build with changed semantics from reaching execution until it
-passes the decoy smoke and the supported date is updated.
+passes the functional smoke and the supported date is updated.
 
 The capability probe recognizes a flag only as a complete help token, followed
 by whitespace, `=`, `,`, or end of text. It must not let `--model` satisfy
@@ -136,7 +145,7 @@ The invocation uses:
 
 ```text
 agent --print --output-format json --mode ask --sandbox enabled \
-  --trust --disable-project-configs --exclude-workspace-context --disable-auto-update \
+  --trust --disable-project-configs --disable-auto-update \
   --workspace <temporary-workspace> --model <mapped-model-id>
 ```
 
@@ -149,12 +158,12 @@ process execution returns. The review payload exists only in parent memory and
 the stdin pipe, not in the workspace.
 
 Cursor applies `--trust` to every workspace root, including `--add-dir`. The
-backend therefore relies on all three controls together: ask mode is read-only,
-workspace context is excluded, and project CLI configuration is disabled.
-Inspection of Cursor CLI `2026.08.04` also shows project MCP discovery and
-approval use the primary workspace, which is empty, rather than added roots.
-The real-CLI isolation smoke check verifies that an added repository's rule and
-MCP decoys have no effect before this support is declared ready.
+backend relies on ask mode, Cursor's sandbox, an empty primary workspace, and
+disabled project CLI configuration. These controls do not prove that an added
+repository's Cursor rules, skills, notes, transcripts, or MCP configuration are
+excluded from the session. Repository-context users must trust the repository's
+Cursor configuration. Payload-only work does not add a repository root and does
+not carry this repository-configuration risk.
 
 For repository-context work, the backend prepends the absolute repository root
 to stdin and instructs Cursor to resolve every relative payload path against
@@ -236,6 +245,9 @@ Document `SUPPORTED_CURSOR_VERSION`, explain that Cursor self-update outside the
 plugin disables this reviewer until compatibility is re-smoked, and give
 `agent install 2026.08.04-aaa8809` as the restore command. Do not recommend
 `agent update` for a version newer than the pin.
+For repository-context reviews, state that the plugin does not verify isolation
+from repository Cursor rules, skills, notes, transcripts, or MCP configuration.
+Tell users to omit repository context when they do not trust that configuration.
 
 Update the consultation, plan-review, and code-review skill contracts so they
 preserve an explicitly selected Cursor alias throughout a workflow.
@@ -268,8 +280,8 @@ Start the behavior change with failing shell-suite assertions for:
   2,000,000-byte shared cap, with no positional prompt or request file.
 - Ask mode, sandboxing, empty temporary workspace isolation, and repository
   access only when repository context is requested.
-- `--disable-project-configs`, `--exclude-workspace-context`, and
-  `--disable-auto-update` on every Cursor invocation.
+- `--disable-project-configs` and `--disable-auto-update` on every Cursor
+  invocation, with `--exclude-workspace-context` absent.
 - An absolute repository root in both `--add-dir` and stdin for
   repository-context work, with no such root for payload-only work.
 - JSON result extraction and `is_error: true` failure handling.
@@ -300,17 +312,16 @@ Before the hermetic suite, compare the four mapped IDs with the authenticated
 automated suite must still use only the fake CLI.
 
 At the final verification gate, obtain explicit user approval for one paid real
-Cursor smoke invocation with the exact production flags and `composer` mapping.
-It uses a
-temporary added repository containing a known file, a conflicting Cursor rule,
-and an MCP decoy whose harmless command would create a marker in that temporary
-directory. The response must contain both the stdin sentinel and known-file
-sentinel, must not follow the conflicting rule, and must not create the MCP
-marker. Record the tested version in `SUPPORTED_CURSOR_VERSION`. The feature
-is not ready to ship until this smoke passes. If approval is not given, stop at
-the verification gate and report the implementation as blocked, not complete or
-experimental. Repeat the smoke before changing the supported version or
-any alias mapping.
+Cursor functional smoke invocation with the exact production flags and
+`composer` mapping. It uses a temporary added repository containing a known
+file. The response must contain both the stdin sentinel and known-file sentinel.
+This smoke proves stdin delivery and repository access. It does not claim that
+repository Cursor rules, skills, notes, transcripts, or MCP configuration are
+isolated. Record the tested version in `SUPPORTED_CURSOR_VERSION`. The feature
+is not ready to ship until this functional smoke passes. If approval is not
+given, stop at the verification gate and report the implementation as blocked,
+not complete or experimental. Repeat the smoke before changing the supported
+version or any alias mapping.
 The smoke harness records any files Cursor placed in the primary workspace
 before it recursively removes that directory, so real workspace-write behavior
 is known without changing production cleanup semantics.
