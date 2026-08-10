@@ -1,6 +1,6 @@
 {
   "name": "adversarial-review",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cross-model consultation and adversarial review, driven by a peer agent CLI.",
   "author": {
     "name": "Alex Hodges"
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Peer Pressure",
     "shortDescription": "Get advice or review from the other agent CLI",
-    "longDescription": "Cross-model consultation, plan review, and code review. The peer is always the agent CLI that is not running the skill: Claude Code uses Codex, and Codex uses Claude Code, so advice and critique come from a different model.",
+    "longDescription": "Cross-model consultation, plan review, and code review. By default, Claude Code uses Codex and Codex uses Claude Code, so advice and critique come from a different model. The Cursor Agent CLI is available as an optional reviewer.",
     "developerName": "Alex Hodges",
     "category": "Developer Tools",
     "capabilities": [
