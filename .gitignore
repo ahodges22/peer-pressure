@@ -6,3 +6,4 @@
 .vscode/
 .claude/settings.local.json
 .conductor/
+.worktrees/
