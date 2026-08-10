@@ -32,7 +32,8 @@ Use ONLY the invocations below. Do NOT invent flags, rename them, or use variant
 | Purpose | Command |
 |---------|---------|
 | Pre-flight check | `{invocation.review} detect` |
-| Cursor pre-flight check | `{invocation.review} detect --peer cursor` |
+| Cursor pre-flight check, Claude Code | `adversarial-review detect --peer cursor` |
+| Cursor pre-flight check, Codex | `node ../../scripts/orchestration.mjs detect --peer cursor` |
 | Inspect repo | `{invocation.review} inspect-repo` |
 | Generate unique context path | `{invocation.review} new-ctx --kind code` |
 | Code review (iteration 1) | `{invocation.review} code-review --mode <uncommitted\|staged\|branch> [--base REF] [--paths "..."] --repo-context [--self-collect] --first` |
@@ -82,8 +83,17 @@ Do not continue past Step 0 until `detect` returns `ok: true`.
 
 When the user explicitly requests Cursor with `composer`, `grok`, `kimi`, or `glm`:
 
-1. Run `{invocation.review} detect --peer cursor`.
-2. Stop unless the result has `ok: true`. Use `invocation.review` verbatim for every later call.
+1. Run the concrete command for the current host:
+
+   ```bash
+   # Claude Code
+   adversarial-review detect --peer cursor
+
+   # Codex, resolved relative to this SKILL.md
+   node ../../scripts/orchestration.mjs detect --peer cursor
+   ```
+
+2. Stop unless the result has `ok: true`. Use the returned `invocation.review` verbatim for every later call.
 3. Run `{invocation.review} code-review --peer cursor --model <selected-alias> ...` for the initial review and preserve those flags on subsequent iterations.
 4. Preserve `--peer cursor` and `--model <selected-alias>` on every review command and the one allowed retry.
 5. Stop on every explicit-Cursor detection or execution failure. Never fall back to Codex or Claude.

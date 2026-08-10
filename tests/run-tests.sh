@@ -140,7 +140,9 @@ do
   skill="$REPO_ROOT/plugins/adversarial-review/skills/$skill_name/SKILL.md"
   allowed_commands=$(sed -n '/## Allowed invocations/,/^## /p' "$skill")
 
-  printf '%s\n' "$allowed_commands" | grep -q '{invocation.review} detect --peer cursor' \
+  ! grep -qF '{invocation.review} detect --peer cursor' "$skill" \
+    && grep -qF 'adversarial-review detect --peer cursor' "$skill" \
+    && grep -qF 'node ../../scripts/orchestration.mjs detect --peer cursor' "$skill" \
     && printf '%s\n' "$allowed_commands" | grep -q "{invocation.review} $review_command --peer cursor --model <selected-alias>" \
     && grep -q 'composer.*grok.*kimi.*glm' "$skill" \
     && grep -q 'same `--peer cursor` and `--model <selected-alias>`.*rerun_same_command_once\|rerun_same_command_once.*same `--peer cursor` and `--model <selected-alias>`' "$skill" \

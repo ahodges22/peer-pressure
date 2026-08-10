@@ -26,7 +26,8 @@ Use only these commands:
 | Purpose | Command |
 |---|---|
 | Preflight | `{invocation.review} detect` |
-| Cursor preflight | `{invocation.review} detect --peer cursor` |
+| Cursor preflight, Claude Code | `adversarial-review detect --peer cursor` |
+| Cursor preflight, Codex | `node ../../scripts/orchestration.mjs detect --peer cursor` |
 | Create context path | `{invocation.review} new-ctx --kind consult` |
 | Consult peer | `{invocation.review} consult --context-file <path>` |
 | Consult Cursor | `{invocation.review} consult --peer cursor --model <selected-alias> --context-file <path>` |
@@ -51,8 +52,17 @@ Stop unless the result has `ok: true`. Use `invocation.review` verbatim for all 
 
 When the user explicitly requests Cursor with `composer`, `grok`, `kimi`, or `glm`:
 
-1. Run `{invocation.review} detect --peer cursor`.
-2. Stop unless the result has `ok: true`. Use `invocation.review` verbatim for every later call.
+1. Run the concrete command for the current host:
+
+   ```bash
+   # Claude Code
+   adversarial-review detect --peer cursor
+
+   # Codex, resolved relative to this SKILL.md
+   node ../../scripts/orchestration.mjs detect --peer cursor
+   ```
+
+2. Stop unless the result has `ok: true`. Use the returned `invocation.review` verbatim for every later call.
 3. Run `{invocation.review} consult --peer cursor --model <selected-alias> --context-file <path>`.
 4. Preserve `--peer cursor` and `--model <selected-alias>` on the consultation command and the one allowed retry.
 5. Stop on every explicit-Cursor detection or execution failure. Never fall back to Codex or Claude.
