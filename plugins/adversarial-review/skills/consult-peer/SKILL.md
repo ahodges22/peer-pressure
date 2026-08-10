@@ -9,6 +9,8 @@ Obtain one independent view from the agent CLI that is not the host, then evalua
 
 The runtime selects the peer. Claude Code consults Codex, and Codex consults Claude Code. Never override that pairing. Never invoke `claude`, `codex`, or another model CLI directly.
 
+The default workflow always uses that host-derived peer. Use the explicit Cursor workflow only when the user explicitly requests Cursor with one alias: `composer`, `grok`, `kimi`, or `glm`.
+
 ## User decisions
 
 Use the host's native interaction method when an answer is required:
@@ -24,14 +26,16 @@ Use only these commands:
 | Purpose | Command |
 |---|---|
 | Preflight | `{invocation.review} detect` |
+| Cursor preflight | `{invocation.review} detect --peer cursor` |
 | Create context path | `{invocation.review} new-ctx --kind consult` |
 | Consult peer | `{invocation.review} consult --context-file <path>` |
+| Consult Cursor | `{invocation.review} consult --peer cursor --model <selected-alias> --context-file <path>` |
 
-The `consult` command accepts only `--context-file PATH` and optional `--model NAME`.
+The default `consult` command accepts only `--context-file PATH` and optional `--model NAME`. Cursor accepts only `--peer cursor`, one selected alias (`composer`, `grok`, `kimi`, or `glm`) in `--model`, and `--context-file PATH`. Do not pass an arbitrary Cursor model ID.
 
 ## 1. Run preflight
 
-Use the command for the current host:
+For the default workflow, use the command for the current host:
 
 ```bash
 # Claude Code
@@ -42,6 +46,18 @@ node ../../scripts/orchestration.mjs detect
 ```
 
 Stop unless the result has `ok: true`. Use `invocation.review` verbatim for all later calls. Report setup hints for `peer_unavailable` or `peer_too_old`. For `unknown_host` or `ambiguous_host`, rerun with the `--host` value in the returned hint.
+
+### Explicit Cursor workflow
+
+When the user explicitly requests Cursor with `composer`, `grok`, `kimi`, or `glm`:
+
+1. Run `{invocation.review} detect --peer cursor`.
+2. Stop unless the result has `ok: true`. Use `invocation.review` verbatim for every later call.
+3. Run `{invocation.review} consult --peer cursor --model <selected-alias> --context-file <path>`.
+4. Preserve `--peer cursor` and `--model <selected-alias>` on the consultation command and the one allowed retry.
+5. Stop on every explicit-Cursor detection or execution failure. Never fall back to Codex or Claude.
+
+Do not use this branch for a request that does not explicitly name Cursor and one supported alias. The default workflow remains host-derived.
 
 If a Claude Code host reports `permissions.tmp_write_preapproved: false`, tell the user that the skill writes one scratch context file under `permissions.tmpdir`, and provide `permissions.expected_rule`. Do not show this message for a Codex host or a preapproved path.
 
@@ -113,7 +129,7 @@ If an error contains all of these fields:
 }
 ```
 
-rerun the exact same command once with the same context path and no edits. Do not retry any other error. In particular, do not retry `missing_recommendation_line`.
+rerun the exact same command once with the same context path and no edits. In the explicit Cursor workflow, preserve the same `--peer cursor` and `--model <selected-alias>` values on `rerun_same_command_once`. Do not retry any other error. In particular, do not retry `missing_recommendation_line`.
 
 Do not start a dialogue, approval loop, finding ledger, or automatic follow-up. A new peer question requires a new explicit user request.
 

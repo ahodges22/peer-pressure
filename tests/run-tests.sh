@@ -128,6 +128,27 @@ else
   no "consult-peer retry or synthesis contract is incomplete"
 fi
 
+# ---------------------------------------------------- Cursor skill contracts
+group "Cursor skill contracts"
+for spec in \
+  "consult-peer consult" \
+  "plan-review plan-review" \
+  "code-review code-review"
+do
+  skill_name=${spec%% *}
+  review_command=${spec#* }
+  skill="$REPO_ROOT/plugins/adversarial-review/skills/$skill_name/SKILL.md"
+  allowed_commands=$(sed -n '/## Allowed invocations/,/^## /p' "$skill")
+
+  printf '%s\n' "$allowed_commands" | grep -q '{invocation.review} detect --peer cursor' \
+    && printf '%s\n' "$allowed_commands" | grep -q "{invocation.review} $review_command --peer cursor --model <selected-alias>" \
+    && grep -q 'composer.*grok.*kimi.*glm' "$skill" \
+    && grep -q 'same `--peer cursor` and `--model <selected-alias>`.*rerun_same_command_once\|rerun_same_command_once.*same `--peer cursor` and `--model <selected-alias>`' "$skill" \
+    && grep -q 'Never fall back to Codex or Claude' "$skill" \
+    && ok "$skill_name preserves the explicit Cursor reviewer contract" \
+    || no "$skill_name Cursor reviewer contract is incomplete"
+done
+
 # --------------------------------------------------------- README contract
 group "README matches the shipped review workflow"
 ROOT_README="$REPO_ROOT/README.md"

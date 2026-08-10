@@ -9,6 +9,8 @@ Draft a plan, submit it to the **peer agent** for adversarial critique, address 
 
 The peer is always the agent CLI that is **not** running this skill - Claude Code is reviewed by Codex, Codex is reviewed by Claude Code. That is the entire point: a reviewer that shares the author's model shares the author's blind spots. The runtime picks the peer for you; never override it.
 
+The default workflow always uses that host-derived peer. Use the explicit Cursor workflow only when the user explicitly requests Cursor with one alias: `composer`, `grok`, `kimi`, or `glm`.
+
 `$ARGUMENTS` contains the task or feature to plan. If it is empty, ambiguous, or missing the concrete task to plan, stop and ask the user what feature/task to review before drafting anything.
 
 All peer interaction goes through the runtime, so a single `Bash(adversarial-review *)` allowlist rule covers every call in Claude Code.
@@ -30,15 +32,18 @@ Use ONLY the invocations below. Do NOT invent flags, rename them, or use variant
 | Purpose | Command |
 |---------|---------|
 | Pre-flight check | `{invocation.review} detect` |
+| Cursor pre-flight check | `{invocation.review} detect --peer cursor` |
 | Generate unique context path | `{invocation.review} new-ctx --kind plan` |
 | Plan review (iteration 1) | `{invocation.review} plan-review --context-file <path> --first` |
 | Plan review (subsequent) | `{invocation.review} plan-review --context-file <path>` |
+| Cursor plan review (iteration 1) | `{invocation.review} plan-review --peer cursor --model <selected-alias> --context-file <path> --first` |
+| Cursor plan review (subsequent) | `{invocation.review} plan-review --peer cursor --model <selected-alias> --context-file <path>` |
 
-The ONLY flags `plan-review` accepts are: `--context-file PATH`, `--first`, `--model NAME`. Anything else will cause an immediate error.
+The default `plan-review` command accepts only `--context-file PATH`, `--first`, and optional `--model NAME`. Cursor accepts only `--peer cursor`, one selected alias (`composer`, `grok`, `kimi`, or `glm`) in `--model`, `--context-file PATH`, and `--first` on the first iteration. Do not pass an arbitrary Cursor model ID.
 
 ## Step 0 - Pre-flight check (mandatory hard gate)
 
-This is the **only** step where the command spelling depends on the host, because it is what tells you the spelling for everything else. Pick the line that matches the CLI you are running in:
+For the default workflow, this is the **only** step where the command spelling depends on the host, because it is what tells you the spelling for everything else. Pick the line that matches the CLI you are running in:
 
 ```bash
 # Claude Code - the plugin's bin/ is on PATH:
@@ -65,6 +70,18 @@ On failure STOP and diagnose:
 - **`"error": "peer_unavailable"` / `"peer_too_old"`**: the peer CLI is missing, unauthenticated, or too old. Present each `setupHints` entry as an actionable step, then re-run `detect` to confirm.
 
 Do not continue past Step 0 until `detect` returns `ok: true`.
+
+### Explicit Cursor workflow
+
+When the user explicitly requests Cursor with `composer`, `grok`, `kimi`, or `glm`:
+
+1. Run `{invocation.review} detect --peer cursor`.
+2. Stop unless the result has `ok: true`. Use `invocation.review` verbatim for every later call.
+3. Run `{invocation.review} plan-review --peer cursor --model <selected-alias> --context-file <path> --first` for the initial review and preserve those flags on subsequent iterations.
+4. Preserve `--peer cursor` and `--model <selected-alias>` on every review command and the one allowed retry.
+5. Stop on every explicit-Cursor detection or execution failure. Never fall back to Codex or Claude.
+
+Do not use this branch for a request that does not explicitly name Cursor and one supported alias. The default workflow remains host-derived.
 
 **Permission heads-up (Claude Code host only):** the `permissions` field is present only when `host` is `claude-code`. If it is present and `permissions.tmp_write_preapproved` is `false`, tell the user once (plain text is fine here, this is not a decision prompt):
 
@@ -155,7 +172,7 @@ If `ok: false`, the JSON contains an `error` field (`peer_unavailable`, `peer_to
 { "retryable": true, "retryReason": "...", "retryInstruction": "rerun_same_command_once" }
 ```
 
-rerun the exact same `{invocation.review} plan-review ...` command once: same flags, same context file, no edits, no regenerated context file, and no prompt to the user before the retry. If the retry returns `ok: true`, process that response normally. If it fails again, report both failures and ask the user how to proceed.
+rerun the exact same `{invocation.review} plan-review ...` command once: same flags, same context file, no edits, no regenerated context file, and no prompt to the user before the retry. In the explicit Cursor workflow, preserve the same `--peer cursor` and `--model <selected-alias>` values on `rerun_same_command_once`. If the retry returns `ok: true`, process that response normally. If it fails again, report both failures and ask the user how to proceed.
 
 Never retry a response without `retryable: true`. Every other failure is a real condition that a second identical run would only repeat.
 

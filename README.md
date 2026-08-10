@@ -45,6 +45,41 @@ codex plugin marketplace add https://github.com/ahodges22/peer-pressure
 codex plugin add adversarial-review@peer-pressure
 ```
 
+### Optional Cursor reviewer
+
+Cursor is an optional reviewer override. It is not a plugin host and does not
+change the default Claude Code to Codex or Codex to Claude pairing. Request
+Cursor explicitly with one supported alias:
+
+```text
+composer -> composer-2.5
+grok -> cursor-grok-4.5-high
+kimi -> kimi-k3-max
+glm -> glm-5.2-max
+```
+
+Install and authenticate the Cursor Agent CLI:
+
+```bash
+curl https://cursor.com/install -fsS | bash
+agent login
+```
+
+Supported build: `2026.08.04-aaa8809`.
+
+Restore: `agent install 2026.08.04-aaa8809`.
+
+Model diagnostics: `agent --list-models`.
+
+Do not use `agent update` to correct a build mismatch. The reviewer supports
+only the listed build until it is re-tested.
+
+Each round starts one Cursor CLI invocation, but a tool-using turn can make
+multiple provider calls. Ask mode and Cursor's sandbox enforce read-only
+behavior at the CLI level, not an OS read-only boundary. The direct child
+timeout is 600 seconds. A descendant retaining an output pipe can keep
+`spawnSync` blocked and delay cleanup.
+
 ## Use
 
 Three skills. Ask for one by name, or describe the task.
