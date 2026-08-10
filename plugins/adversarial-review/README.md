@@ -51,6 +51,12 @@ behavior at the CLI level, not an OS read-only boundary. The direct child
 timeout is 600 seconds. A descendant retaining an output pipe can keep
 `spawnSync` blocked and delay cleanup.
 
+Payload-only Cursor work exposes only an empty temporary workspace.
+Repository-context work also grants Cursor read access to the repository. Cursor
+rules, skills, notes, transcripts, or MCP configuration in that repository can
+influence the session, so use repository context only with repositories whose
+Cursor configuration you trust.
+
 ## Layout
 
 `bin/` holds the `adversarial-review` bash shim. It forwards to `scripts/orchestration.mjs`, so one `Bash(adversarial-review *)` allowlist rule covers every subcommand. The shim is a Claude Code convenience. Codex does not put plugin `bin/` on `PATH`, so its skills call the runtime by the absolute path that `detect` returns in `invocation.review`.

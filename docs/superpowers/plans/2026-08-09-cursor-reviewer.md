@@ -16,8 +16,8 @@
 - `grok` maps to `cursor-grok-4.5-high`.
 - `kimi` maps to `kimi-k3-max`.
 - `glm` maps to `glm-5.2-max`.
-- Support only Cursor CLI `2026.08.04-aaa8809` until the real isolation smoke test is repeated.
-- Cursor runs with `--print --output-format json --mode ask --sandbox enabled --trust --disable-project-configs --exclude-workspace-context --disable-auto-update`.
+- Support only Cursor CLI `2026.08.04-aaa8809` until the real functional smoke test is repeated.
+- Cursor runs with `--print --output-format json --mode ask --sandbox enabled --trust --disable-project-configs --disable-auto-update`.
 - Cursor payloads use stdin and retain the shared `2_000_000` byte payload cap.
 - Cursor uses a fresh empty temporary primary workspace for every invocation and removes it after every returned result.
 - Repository context adds only the absolute repository root with `--add-dir` and prepends the same root to stdin.
@@ -179,7 +179,6 @@ Build arguments in this order:
   "--sandbox", "enabled",
   "--trust",
   "--disable-project-configs",
-  "--exclude-workspace-context",
   "--disable-auto-update",
   "--workspace", workspace,
   ...(cwd ? ["--add-dir", path.resolve(cwd)] : []),
@@ -483,6 +482,5 @@ After all tasks and task reviews are complete:
 
 1. Run `rtk agent --list-models` outside the hermetic suite and verify all four mapped IDs are present. This sends no model request.
 2. Run the complete `rtk tests/run-tests.sh` suite.
-3. Ask the user for explicit approval before one paid real Cursor smoke invocation with the `composer` alias and exact production flags.
-4. The smoke uses a temporary added repository with a known-file sentinel, conflicting Cursor rule, and MCP marker decoy. It must return the stdin and file sentinels, ignore the conflicting rule, and leave the MCP marker absent.
-5. Run adversarial code review against the complete branch diff. Fix merge-blocking findings and repeat until approved or the user stops at a checkpoint.
+3. Ask the user for explicit approval before one paid real Cursor smoke invocation with the `composer` alias and exact production flags. The smoke must prove that Cursor receives the stdin sentinel and can read a known repository file through the absolute `--add-dir`. It must not be used as evidence that repository Cursor rules, skills, notes, transcripts, or MCP configuration are isolated.
+4. Run adversarial code review against the complete branch diff. Fix merge-blocking findings and repeat until approved or the user stops at a checkpoint.

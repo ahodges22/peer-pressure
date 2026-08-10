@@ -80,6 +80,12 @@ behavior at the CLI level, not an OS read-only boundary. The direct child
 timeout is 600 seconds. A descendant retaining an output pipe can keep
 `spawnSync` blocked and delay cleanup.
 
+Payload-only Cursor work exposes only an empty temporary workspace.
+Repository-context work also grants Cursor read access to the repository. Cursor
+rules, skills, notes, transcripts, or MCP configuration in that repository can
+influence the session, so use repository context only with repositories whose
+Cursor configuration you trust.
+
 ## Use
 
 Three skills. Ask for one by name, or describe the task.
