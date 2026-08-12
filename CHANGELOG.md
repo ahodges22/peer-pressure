@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/ahodges22/peer-pressure/compare/v0.2.0...v0.2.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* accept leading whitespace before review status ([af0acee](https://github.com/ahodges22/peer-pressure/commit/af0aceef065ce1e87f9540d74492e41aba22d111))
+
 ## [0.2.0](https://github.com/ahodges22/peer-pressure/compare/v0.1.0...v0.2.0) (2026-08-10)
 
 
