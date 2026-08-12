@@ -7,7 +7,9 @@ description: Adversarial code review loop driven by a peer agent CLI. Submits co
 
 Iterative adversarial code review. Submit a git diff to the **peer agent** for critique, fix material findings, repeat until approved or the user stops.
 
-The peer is always the agent CLI that is **not** running this skill - Claude Code is reviewed by Codex, Codex is reviewed by Claude Code. A reviewer that shares the author's model shares the author's blind spots. The runtime picks the peer for you; never override it.
+By default, the peer is the agent CLI that is **not** running this skill - Claude Code is reviewed by Codex, Codex is reviewed by Claude Code. A reviewer that shares the author's model shares the author's blind spots. The runtime picks the peer for you. Cursor is the only explicit override.
+
+The default workflow always uses that host-derived peer. Use the explicit Cursor workflow only when the user explicitly requests Cursor with one alias: `composer`, `grok`, `kimi`, or `glm`.
 
 `$ARGUMENTS` optionally specifies scope, focus areas, or `--base <branch>` for branch comparison.
 
@@ -30,12 +32,16 @@ Use ONLY the invocations below. Do NOT invent flags, rename them, or use variant
 | Purpose | Command |
 |---------|---------|
 | Pre-flight check | `{invocation.review} detect` |
+| Cursor pre-flight check, Claude Code | `adversarial-review detect --peer cursor` |
+| Cursor pre-flight check, Codex | `node ../../scripts/orchestration.mjs detect --peer cursor` |
 | Inspect repo | `{invocation.review} inspect-repo` |
 | Generate unique context path | `{invocation.review} new-ctx --kind code` |
 | Code review (iteration 1) | `{invocation.review} code-review --mode <uncommitted\|staged\|branch> [--base REF] [--paths "..."] --repo-context [--self-collect] --first` |
 | Code review (subsequent) | `{invocation.review} code-review --mode <...> [--base REF] [--paths "..."] --context-file <path> --repo-context [--self-collect]` |
+| Cursor code review (iteration 1) | `{invocation.review} code-review --peer cursor --model <selected-alias> --mode <uncommitted\|staged\|branch> [--base REF] [--paths "..."] --repo-context [--self-collect] --first` |
+| Cursor code review (subsequent) | `{invocation.review} code-review --peer cursor --model <selected-alias> --mode <...> [--base REF] [--paths "..."] --context-file <path> --repo-context [--self-collect]` |
 
-The ONLY flags `code-review` accepts are: `--mode`, `--base`, `--paths`, `--context-file`, `--first`, `--model`, `--repo-context`, `--self-collect`, `--include-secrets`, `--include-large`, `--include-binary`, `--allow-skipped-large`. Anything else will cause an immediate error.
+The default `code-review` command accepts only `--mode`, `--base`, `--paths`, `--context-file`, `--first`, `--model`, `--repo-context`, `--self-collect`, `--include-secrets`, `--include-large`, `--include-binary`, and `--allow-skipped-large`. Cursor additionally accepts `--peer cursor`, but its `--model` must be one selected alias: `composer`, `grok`, `kimi`, or `glm`. Do not pass an arbitrary Cursor model ID.
 
 **`--self-collect`** is an optional optimization for `--repo-context` mode: instead of bundling the full diff into the payload, it ships a compact manifest (mode, scope, changed-file list) and lets the peer read what it needs from the repo directly. Use it when the diff is large enough that bundling it eats payload tokens the peer could spend reading exactly the relevant files. Requires `--repo-context`. Skip it for small/medium diffs - bundling the full diff is faster and more deterministic.
 
@@ -45,7 +51,7 @@ When fixing findings, prefer the smallest change that fully resolves the real is
 
 ## Step 0 - Pre-flight check (mandatory hard gate)
 
-This is the **only** step where the command spelling depends on the host, because it is what tells you the spelling for everything else. Pick the line that matches the CLI you are running in:
+For the default workflow, this is the **only** step where the command spelling depends on the host, because it is what tells you the spelling for everything else. Pick the line that matches the CLI you are running in:
 
 ```bash
 # Claude Code - the plugin's bin/ is on PATH:
@@ -72,6 +78,27 @@ On failure STOP and diagnose:
 - **`"error": "peer_unavailable"` / `"peer_too_old"`**: the peer CLI is missing, unauthenticated, or too old. Present each `setupHints` entry as an actionable step, then re-run `detect` to confirm.
 
 Do not continue past Step 0 until `detect` returns `ok: true`.
+
+### Explicit Cursor workflow
+
+When the user explicitly requests Cursor with `composer`, `grok`, `kimi`, or `glm`:
+
+1. Run the concrete command for the current host:
+
+   ```bash
+   # Claude Code
+   adversarial-review detect --peer cursor
+
+   # Codex, resolved relative to this SKILL.md
+   node ../../scripts/orchestration.mjs detect --peer cursor
+   ```
+
+2. Stop unless the result has `ok: true`. Use the returned `invocation.review` verbatim for every later call.
+3. Run `{invocation.review} code-review --peer cursor --model <selected-alias> ...` for the initial review and preserve those flags on subsequent iterations.
+4. Preserve `--peer cursor` and `--model <selected-alias>` on every review command and the one allowed retry.
+5. Stop on every explicit-Cursor detection or execution failure. Never fall back to Codex or Claude.
+
+Do not use this branch for a request that does not explicitly name Cursor and one supported alias. The default workflow remains host-derived.
 
 **Permission heads-up (Claude Code host only):** the `permissions` field is present only when `host` is `claude-code`. If it is present and `permissions.tmp_write_preapproved` is `false`, tell the user once (plain text is fine here, this is not a decision prompt):
 
@@ -178,7 +205,7 @@ If `ok: false`, the JSON contains an `error` field (`peer_unavailable`, `peer_to
 { "retryable": true, "retryReason": "...", "retryInstruction": "rerun_same_command_once" }
 ```
 
-rerun the exact same `{invocation.review} code-review ...` command once: same mode, same flags, same context file, no code edits, no regenerated context file, and no prompt to the user before the retry. If the retry returns `ok: true`, process that response normally. If it fails again, report both failures and ask the user how to proceed.
+rerun the exact same `{invocation.review} code-review ...` command once: same mode, same flags, same context file, no code edits, no regenerated context file, and no prompt to the user before the retry. In the explicit Cursor workflow, preserve the same `--peer cursor` and `--model <selected-alias>` values on `rerun_same_command_once`. If the retry returns `ok: true`, process that response normally. If it fails again, report both failures and ask the user how to proceed.
 
 Never retry a response without `retryable: true`. Every other failure is a real condition that a second identical run would only repeat.
 

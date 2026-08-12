@@ -2,9 +2,10 @@
 
 import { agent as codex } from "./codex.mjs";
 import { agent as claude } from "./claude.mjs";
+import { agent as cursor } from "./cursor.mjs";
 import { peerIdFor } from "../host.mjs";
 
-const AGENTS = { codex, claude };
+const AGENTS = { codex, claude, cursor };
 
 export function getAgent(id) {
   const a = AGENTS[id];
@@ -12,9 +13,11 @@ export function getAgent(id) {
   return a;
 }
 
-/** The agent that reviews work produced by `host`. */
-export function peerFor(host) {
-  return getAgent(peerIdFor(host));
+/** The agent that reviews work produced by `host`, unless explicitly selected. */
+export function peerFor(host, override) {
+  if (override === undefined) return getAgent(peerIdFor(host));
+  if (override === "cursor") return getAgent("cursor");
+  throw new Error(`unknown peer '${override}'`);
 }
 
 export { MAX_PAYLOAD_BYTES, PayloadTooLargeError, parseStatus, classifyTransient } from "./common.mjs";

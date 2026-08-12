@@ -128,6 +128,29 @@ else
   no "consult-peer retry or synthesis contract is incomplete"
 fi
 
+# ---------------------------------------------------- Cursor skill contracts
+group "Cursor skill contracts"
+for spec in \
+  "consult-peer consult" \
+  "plan-review plan-review" \
+  "code-review code-review"
+do
+  skill_name=${spec%% *}
+  review_command=${spec#* }
+  skill="$REPO_ROOT/plugins/adversarial-review/skills/$skill_name/SKILL.md"
+  allowed_commands=$(sed -n '/## Allowed invocations/,/^## /p' "$skill")
+
+  ! grep -qF '{invocation.review} detect --peer cursor' "$skill" \
+    && grep -qF 'adversarial-review detect --peer cursor' "$skill" \
+    && grep -qF 'node ../../scripts/orchestration.mjs detect --peer cursor' "$skill" \
+    && printf '%s\n' "$allowed_commands" | grep -q "{invocation.review} $review_command --peer cursor --model <selected-alias>" \
+    && grep -q 'composer.*grok.*kimi.*glm' "$skill" \
+    && grep -q 'same `--peer cursor` and `--model <selected-alias>`.*rerun_same_command_once\|rerun_same_command_once.*same `--peer cursor` and `--model <selected-alias>`' "$skill" \
+    && grep -q 'Never fall back to Codex or Claude' "$skill" \
+    && ok "$skill_name preserves the explicit Cursor reviewer contract" \
+    || no "$skill_name Cursor reviewer contract is incomplete"
+done
+
 # --------------------------------------------------------- README contract
 group "README matches the shipped review workflow"
 ROOT_README="$REPO_ROOT/README.md"
@@ -556,8 +579,8 @@ FAKE_CLAUDE_VERSION=1.9.0 env ADVERSARIAL_REVIEW_HOST=codex node "$CLI_JS" detec
 # A build missing a flag the backend emits would fail deep inside the CLI with an
 # opaque usage error; detect names the flag instead.
 FAKE_CLAUDE_HELP_OMIT="--safe-mode" env ADVERSARIAL_REVIEW_HOST=codex node "$CLI_JS" detect 2>&1 \
-  | grep -q 'unsupported_build\|missingFlags' \
-  && ok "missing required flag is named at detect time" || no "flag probe not enforced"
+  | grep -q '"error": "peer_unavailable"' \
+  && ok "default Claude flag failure preserves peer_unavailable" || no "default Claude detection mapping changed"
 
 # The reviewer must not inherit the host's CLAUDE.md, skills, plugins or MCP, and
 # must have no filesystem access when reviewing a payload-only diff.
@@ -568,6 +591,24 @@ grep -q -- '--safe-mode' "$AL" && ok "reviewer runs with --safe-mode (host confi
 grep -q -- '--tools' "$AL" && ok "reviewer tool set is constrained" || no "reviewer tools unconstrained"
 grep -q -- '--permission-mode bypassPermissions' "$AL" \
   && no "review path must never bypass permissions" || ok "review path does not bypass permissions"
+
+# ------------------------------------------------------ review status parsing
+group "review status parsing"
+node --input-type=module -e '
+const { parseStatus } = await import("'"$REPO_ROOT"'/plugins/adversarial-review/scripts/lib/agents/common.mjs");
+const valid = new Set(["APPROVED", "CHANGES_REQUIRED"]);
+if (parseStatus("\n \t\uFEFFSTATUS: APPROVED\nreview body", valid) !== "APPROVED") process.exit(1);
+' >/dev/null 2>&1 \
+  && ok "leading transport whitespace does not hide review status" \
+  || no "leading transport whitespace hides review status"
+
+node --input-type=module -e '
+const { parseStatus } = await import("'"$REPO_ROOT"'/plugins/adversarial-review/scripts/lib/agents/common.mjs");
+const valid = new Set(["APPROVED", "CHANGES_REQUIRED"]);
+if (parseStatus("review complete\nSTATUS: APPROVED", valid) !== null) process.exit(1);
+' >/dev/null 2>&1 \
+  && ok "prose before review status remains invalid" \
+  || no "review status parser searches through prose"
 
 # ------------------------------------------------- transient-failure retry flag
 group "transient failures are marked retryable"
@@ -605,6 +646,349 @@ if (classifyTransient({ rc: 0 })) bad.push("rc0 treated as failure");
 if (bad.length) { console.log(bad.join(" ")); process.exit(1); }
 ' >/dev/null 2>&1 && ok "status classification: 4 transient, 5 terminal, rc0 ignored" \
   || no "classifyTransient regression"
+
+FAKE_CODEX_SELF_KILL=true cli plan-review --context-file "$WORK/plan-ctx.txt" --first \
+  | grep -q '"retryable": true' \
+  && ok "default-peer timeout remains retryable" || no "default-peer timeout became terminal"
+
+# -------------------------------------------------------------- cursor backend
+group "cursor backend"
+export PEER_PRESSURE_TEST_AGENT=peer-pressure-test-agent
+expected_agent="$TESTS_DIR/bin/agent"
+[ "$(command -v agent)" = "$expected_agent" ] || exit 1
+[ "$(agent --fixture-id)" = "peer-pressure-test-agent" ] || exit 1
+
+CURSOR_MODULE="$REPO_ROOT/plugins/adversarial-review/scripts/lib/agents/cursor.mjs"
+FAKE_AGENT_ROOT="$WORK/cursor-contract"
+mkdir -p "$FAKE_AGENT_ROOT"
+CURSOR_MODULE="$CURSOR_MODULE" FAKE_AGENT_ROOT="$FAKE_AGENT_ROOT" node --input-type=module <<'EOF'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const modulePath = process.env.CURSOR_MODULE;
+const work = process.env.FAKE_AGENT_ROOT;
+const { agent, buildRunOptions, CURSOR_MODELS, SUPPORTED_CURSOR_VERSION } = await import(modulePath);
+const requiredFlags = ["--print", "--output-format", "--mode", "--sandbox", "--trust", "--workspace", "--add-dir", "--model"];
+const saved = { ...process.env };
+let result;
+const reset = () => {
+  for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+  Object.assign(process.env, saved);
+};
+const detect = (values = {}) => {
+  reset(); Object.assign(process.env, values); return agent.detect();
+};
+const run = (values = {}, options = {}) => {
+  reset(); Object.assign(process.env, values);
+  return agent.run({ prompt: "review prompt", payload: "payload", model: "composer", timeoutMs: 1_000, ...options });
+};
+
+assert.equal(SUPPORTED_CURSOR_VERSION, "2026.08.04-aaa8809");
+assert.deepEqual(CURSOR_MODELS, { composer: "composer-2.5", grok: "cursor-grok-4.5-high", kimi: "kimi-k3-max", glm: "glm-5.2-max" });
+assert(Object.isFrozen(CURSOR_MODELS));
+assert.equal(agent.id, "cursor");
+assert.equal(agent.command, "agent");
+assert.equal(buildRunOptions({ workspace: "/tmp/cursor-test", input: "review input" }).timeout, 600_000);
+assert.equal(detect({ FAKE_AGENT_VERSION: SUPPORTED_CURSOR_VERSION }).ok, true);
+for (const version of ["2026.08.03-aaa8809", "2026.08.05-aaa8809", "2026.08.04-wrong", "2026.08.04"]) {
+  const result = detect({ FAKE_AGENT_VERSION: version });
+  assert.equal(result.reason, "unsupported_build");
+  assert.equal(result.version, version);
+  assert.equal(result.supportedVersion, SUPPORTED_CURSOR_VERSION);
+  assert.deepEqual(result.setupHints, ["agent install 2026.08.04-aaa8809"]);
+}
+assert.equal(detect({ FAKE_AGENT_VERSION: "nightly" }).reason, "unsupported_version_format");
+assert.equal(detect({ FAKE_AGENT_VERSION: "" }).version, "");
+assert.equal(detect({ FAKE_AGENT_VERSION_RC: "1" }).reason, "authentication_failed");
+assert.deepEqual(detect({ FAKE_AGENT_HELP_OMIT: "--mode" }).missingFlags, ["--mode"]);
+assert.deepEqual(detect({ FAKE_AGENT_HELP_OMIT: requiredFlags.join(" ") }).missingFlags, requiredFlags);
+const oldPath = process.env.PATH; process.env.PATH = "/no-such-agent-path";
+assert.equal(agent.detect().reason, "not_installed"); process.env.PATH = oldPath;
+
+result = run({ PATH: "/no-such-agent-path" });
+assert.equal(result.rc, -1);
+assert.equal(result.spawnError.code, "ENOENT");
+assert.equal(typeof result.spawnError.message, "string");
+assert(result.spawnError.message.length > 0);
+
+const payload = "p".repeat(300_000);
+const arglog = path.join(work, "args.log");
+const inputlog = path.join(work, "input.log");
+const workspaces = path.join(work, "workspaces.log");
+result = run({ FAKE_AGENT_ARGLOG: arglog, FAKE_AGENT_INPUTLOG: inputlog, FAKE_AGENT_WORKSPACE_LOG: workspaces }, { payload });
+assert.equal(result.rc, 0);
+assert.equal(result.output, "STATUS: APPROVED\n\nfake-cursor reply body.");
+assert.equal(fs.readFileSync(inputlog, "utf8"), `review prompt\n\n${payload}`);
+const args = fs.readFileSync(arglog, "utf8").trim().split("\n").filter((line) => line.startsWith("arg=")).map((line) => line.slice(4));
+const workspace = args[args.indexOf("--workspace") + 1];
+assert.deepEqual(args, [
+  "--print", "--output-format", "json", "--mode", "ask", "--sandbox", "enabled", "--trust",
+  "--disable-project-configs", "--disable-auto-update",
+  "--workspace", workspace, "--model", "composer-2.5"
+]);
+assert(!args.includes("--exclude-workspace-context"));
+assert.equal(fs.readFileSync(workspaces, "utf8").match(/^entries=$/m)?.[0], "entries=");
+assert(!args.includes("review prompt"));
+
+const repo = path.join(work, "repo"); fs.mkdirSync(repo);
+fs.writeFileSync(arglog, ""); fs.writeFileSync(inputlog, "");
+result = run({ FAKE_AGENT_ARGLOG: arglog, FAKE_AGENT_INPUTLOG: inputlog }, { cwd: repo, prompt: "repo prompt", payload: "repo payload" });
+assert.equal(result.rc, 0);
+const repoArgs = fs.readFileSync(arglog, "utf8").split("\n").filter((line) => line.startsWith("arg=")).map((line) => line.slice(4));
+assert.deepEqual(repoArgs.slice(repoArgs.indexOf("--add-dir"), repoArgs.indexOf("--add-dir") + 2), ["--add-dir", path.resolve(repo)]);
+assert.equal(fs.readFileSync(inputlog, "utf8"), `Repository root: ${path.resolve(repo)}\nResolve every relative payload path against this root.\n\nrepo prompt\n\nrepo payload`);
+
+fs.writeFileSync(workspaces, "");
+run({ FAKE_AGENT_WORKSPACE_LOG: workspaces }); run({ FAKE_AGENT_WORKSPACE_LOG: workspaces });
+const paths = fs.readFileSync(workspaces, "utf8").split("\n").filter((line) => line.startsWith("workspace=")).map((line) => line.slice(10));
+assert.equal(paths.length, 2); assert.notEqual(paths[0], paths[1]);
+for (const workspace of paths) { assert(workspace.startsWith(os.tmpdir())); assert.equal(fs.existsSync(workspace), false); }
+for (const values of [
+  { FAKE_AGENT_WRITE_WORKSPACE: "true" },
+  { FAKE_AGENT_WRITE_WORKSPACE: "true", FAKE_AGENT_RC: "7" },
+  { FAKE_AGENT_WRITE_WORKSPACE: "true", FAKE_AGENT_SLEEP: "2" },
+  { FAKE_AGENT_WRITE_WORKSPACE: "true", FAKE_AGENT_OUTPUT_MODE: "non-json" }
+]) {
+  fs.writeFileSync(workspaces, "");
+  result = run({ ...values, FAKE_AGENT_WORKSPACE_LOG: workspaces }, { timeoutMs: values.FAKE_AGENT_SLEEP ? 500 : 1_000 });
+  const workspace = fs.readFileSync(workspaces, "utf8").match(/^workspace=(.+)$/m)?.[1];
+  assert(workspace); assert.equal(fs.existsSync(workspace), false);
+}
+result = run({ FAKE_AGENT_IS_ERROR: "true", FAKE_AGENT_API_ERROR_STATUS: "529" });
+assert.notEqual(result.rc, 0); assert.equal(result.apiErrorStatus, 529);
+for (const mode of ["non-json", "prefixed-json", "missing-result", "empty-result"]) assert.notEqual(run({ FAKE_AGENT_OUTPUT_MODE: mode }).rc, 0);
+assert.equal(run({ FAKE_AGENT_RC: "9", FAKE_AGENT_OUTPUT_MODE: "non-json" }).rc, 9);
+result = run({ FAKE_AGENT_OUTPUT_BYTES: "34000000" }, { timeoutMs: 10_000 });
+assert.notEqual(result.rc, 0); assert.equal(result.outputTooLarge, true); assert.equal(result.timedOut, false);
+result = run({ FAKE_AGENT_MODEL_REJECT: "true" }, { model: "grok" });
+assert.equal(result.modelRejected, true); assert.equal(result.modelAlias, "grok");
+assert.equal(result.modelId, "cursor-grok-4.5-high"); assert.equal(result.modelListCommand, "agent --list-models");
+
+const rmSync = fs.rmSync; fs.rmSync = () => { throw new Error("cleanup denied"); };
+try {
+  result = run(); assert.equal(result.rc, 0); assert.match(result.cleanupError, /cleanup denied/);
+} finally { fs.rmSync = rmSync; }
+reset();
+EOF
+cursor_contract_rc=$?
+[ "$cursor_contract_rc" -eq 0 ] \
+  && ok "Cursor backend detection and run contracts" || no "Cursor backend detection or run contract"
+
+# --------------------------------------------------------- Cursor peer override
+group "Cursor peer override"
+CURSOR_VERSION="2026.08.04-aaa8809"
+CURSOR_ARGS="$WORK/cursor-runtime-args.log"
+CURSOR_INPUT="$WORK/cursor-runtime-input.log"
+CURSOR_WORKSPACES="$WORK/cursor-runtime-workspaces.log"
+CODEX_ARGS="$WORK/cursor-runtime-codex.log"
+CLAUDE_ARGS="$WORK/cursor-runtime-claude.log"
+NODE_BIN="$(command -v node)"
+: > "$CURSOR_ARGS"; : > "$CURSOR_INPUT"; : > "$CURSOR_WORKSPACES"
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+
+QUESTION_CTX="$WORK/cursor-question.txt"
+PLAN_CTX="$WORK/cursor-plan.txt"
+printf '===== QUESTION START =====\nUse Redis or the database?\n===== QUESTION END =====\n' > "$QUESTION_CTX"
+printf '===== PLAN START =====\nship the thing\n===== PLAN END =====\n' > "$PLAN_CTX"
+R=$(newrepo cursor-runtime); cd "$R"
+printf 'changed\n' >> seed.txt
+
+cursor_cli(){
+  env PEER_PRESSURE_TEST_AGENT=peer-pressure-test-agent \
+    FAKE_AGENT_ARGLOG="$CURSOR_ARGS" \
+    FAKE_AGENT_INPUTLOG="$CURSOR_INPUT" \
+    FAKE_AGENT_WORKSPACE_LOG="$CURSOR_WORKSPACES" \
+    FAKE_CODEX_ARGLOG="$CODEX_ARGS" \
+    FAKE_CLAUDE_ARGLOG="$CLAUDE_ARGS" \
+    node "$CLI_JS" "$@" 2>&1
+}
+
+cursor_cli detect --peer cursor | grep -q '"host": "claude-code"' \
+  && cursor_cli detect --peer cursor | grep -q '"peer": "cursor"' \
+  && cursor_cli detect --peer cursor | grep -q "\"version\": \"$CURSOR_VERSION\"" \
+  && cursor_cli detect --peer cursor | grep -q '"sandbox": "ask-mode"' \
+  && ok "detect selects Cursor with its version and confinement" \
+  || no "detect does not report the Cursor reviewer contract"
+cursor_cli detect --peer=cursor | grep -q '"peer": "cursor"' \
+  && ok "equals-form Cursor peer selection works" \
+  || no "equals-form Cursor peer selection is rejected"
+
+env ADVERSARIAL_REVIEW_HOST=claude-code node "$CLI_JS" detect 2>&1 | grep -q '"peer": "codex"' \
+  && ok "default Claude Code host still selects Codex" \
+  || no "Claude Code default reviewer changed"
+env ADVERSARIAL_REVIEW_HOST=codex node "$CLI_JS" detect 2>&1 | grep -q '"peer": "claude"' \
+  && ok "default Codex host still selects Claude" \
+  || no "Codex default reviewer changed"
+
+cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"peer": "cursor"' \
+  && ok "consult accepts the composer Cursor alias" || no "consult rejects composer"
+cursor_cli plan-review --peer cursor --model grok --context-file "$PLAN_CTX" --first \
+  | grep -q '"status": "APPROVED"' \
+  && ok "plan review accepts the grok Cursor alias" || no "plan review rejects grok"
+cursor_cli code-review --peer cursor --model kimi --mode uncommitted --first \
+  | grep -q '"status": "APPROVED"' \
+  && ok "payload-only code review accepts the kimi Cursor alias" || no "code review rejects kimi"
+payload_input=$(cat "$CURSOR_INPUT")
+case "$payload_input" in
+  *"Repository root:"*) no "payload-only commands expose a repository root" ;;
+  *) ok "payload-only commands expose no repository root" ;;
+esac
+cursor_cli code-review --peer cursor --model glm --mode uncommitted --repo-context --first \
+  | grep -q '"status": "APPROVED"' \
+  && ok "repository code review accepts the glm Cursor alias" || no "repository review rejects glm"
+
+for alias_and_id in \
+  'composer composer-2.5' \
+  'grok cursor-grok-4.5-high' \
+  'kimi kimi-k3-max' \
+  'glm glm-5.2-max'
+do
+  alias=${alias_and_id%% *}
+  model_id=${alias_and_id#* }
+  grep -q "arg=$model_id" "$CURSOR_ARGS" \
+    && ok "Cursor alias $alias maps to $model_id" || no "Cursor alias $alias did not map to $model_id"
+done
+
+repo_root=$(cd "$R" && pwd -P)
+grep -q "arg=$repo_root" "$CURSOR_ARGS" \
+  && grep -q "Repository root: $repo_root" "$CURSOR_INPUT" \
+  && ok "repository context passes the absolute root to Cursor" \
+  || no "repository context does not pass the absolute root"
+
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+cursor_cli consult --peer cursor --context-file "$QUESTION_CTX" | grep -q '"error": "invalid_usage"' \
+  && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+  && ok "missing Cursor alias invokes no default peer" || no "missing Cursor alias contract is wrong"
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+cursor_cli consult --peer cursor --model unknown --context-file "$QUESTION_CTX" | grep -q 'composer|grok|kimi|glm' \
+  && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+  && ok "unknown Cursor alias invokes no default peer" || no "unknown Cursor alias contract is wrong"
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+cursor_cli detect --peer nope | grep -q '"error": "invalid_usage"' \
+  && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+  && ok "unknown explicit peer is invalid usage without fallback" || no "unknown explicit peer contract is wrong"
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+cursor_cli detect --peer nope --peer cursor | grep -q '"error": "invalid_usage"' \
+  && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+  && ok "every explicit peer value is validated" || no "an earlier invalid peer can be hidden"
+
+MISSING_AGENT_BIN="$WORK/missing-agent-bin"
+mkdir -p "$MISSING_AGENT_BIN"
+ln -s "$TESTS_DIR/bin/codex" "$MISSING_AGENT_BIN/codex"
+ln -s "$TESTS_DIR/bin/claude" "$MISSING_AGENT_BIN/claude"
+for failure in missing auth build version empty_version flag; do
+  : > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+  case "$failure" in
+    missing) out=$(env PATH="$MISSING_AGENT_BIN:/usr/bin:/bin" PEER_PRESSURE_TEST_AGENT=peer-pressure-test-agent FAKE_CODEX_ARGLOG="$CODEX_ARGS" FAKE_CLAUDE_ARGLOG="$CLAUDE_ARGS" "$NODE_BIN" "$CLI_JS" detect --peer cursor 2>&1) ; expected='"error": "peer_unavailable"' ;;
+    auth) out=$(FAKE_AGENT_VERSION_RC=1 cursor_cli detect --peer cursor) ; expected='"error": "authentication_failed"' ;;
+    build) out=$(FAKE_AGENT_VERSION=2026.08.03-aaa8809 cursor_cli detect --peer cursor) ; expected='"error": "unsupported_build"' ;;
+    version) out=$(FAKE_AGENT_VERSION=nightly cursor_cli detect --peer cursor) ; expected='"error": "unsupported_version_format"' ;;
+    empty_version) out=$(FAKE_AGENT_VERSION= cursor_cli detect --peer cursor) ; expected='"version": ""' ;;
+    flag) out=$(FAKE_AGENT_HELP_OMIT=--mode cursor_cli detect --peer cursor) ; expected='"missingFlags"' ;;
+  esac
+  printf '%s' "$out" | grep -q "$expected" \
+    && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+    && ok "Cursor $failure detection failure does not fall back" \
+    || no "Cursor $failure detection failure has the wrong contract"
+done
+
+SPAWN_ERROR_AGENT_BIN="$WORK/spawn-error-agent-bin"
+mkdir -p "$SPAWN_ERROR_AGENT_BIN"
+ln -s "$TESTS_DIR/bin/agent" "$SPAWN_ERROR_AGENT_BIN/agent"
+: > "$CODEX_ARGS"; : > "$CLAUDE_ARGS"
+out=$(env PATH="$SPAWN_ERROR_AGENT_BIN:/usr/bin:/bin" \
+  PEER_PRESSURE_TEST_AGENT=peer-pressure-test-agent \
+  FAKE_AGENT_REMOVE_AFTER_HELP=true \
+  FAKE_CODEX_ARGLOG="$CODEX_ARGS" \
+  FAKE_CLAUDE_ARGLOG="$CLAUDE_ARGS" \
+  "$NODE_BIN" "$CLI_JS" consult --peer cursor --model composer --context-file "$QUESTION_CTX" 2>&1)
+printf '%s' "$out" | node -e '
+let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+  const x=JSON.parse(s);
+  if (x.error !== "peer_failed" || x.peer !== "cursor" || x.rc !== -1 ||
+      x.spawnError?.code !== "ENOENT" || typeof x.spawnError.message !== "string" ||
+      x.spawnError.message.length === 0) process.exit(1);
+});' 2>/dev/null \
+  && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
+  && ok "Cursor spawn failure preserves diagnostics without default-peer fallback" \
+  || no "Cursor spawn failure lost diagnostics or fell back"
+
+: > "$CURSOR_ARGS"; : > "$CURSOR_INPUT"; : > "$CURSOR_WORKSPACES"
+FAKE_AGENT_IS_ERROR=true FAKE_AGENT_API_ERROR_STATUS=529 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"retryable": true' \
+  && ok "Cursor transient failure is retryable" || no "Cursor transient failure is not retryable"
+first_input=$(cat "$CURSOR_INPUT")
+FAKE_AGENT_STATUS='RECOMMENDATION: Use the database' cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"ok": true' \
+  && [ "$first_input" = "$(cat "$CURSOR_INPUT")" ] \
+  && [ "$(grep -c '^arg=composer-2.5$' "$CURSOR_ARGS")" -eq 2 ] \
+  && [ "$(grep '^workspace=' "$CURSOR_WORKSPACES" | sort -u | wc -l | tr -d ' ')" -eq 2 ] \
+  && ok "Cursor retry preserves stdin and alias in a fresh workspace" \
+  || no "Cursor retry does not preserve the request safely"
+
+out=$(FAKE_AGENT_OUTPUT_BYTES=34000000 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX")
+printf '%s' "$out" | node -e '
+let s = "";
+process.stdin.on("data", (d) => { s += d; }).on("end", () => {
+  const x = JSON.parse(s);
+  const failures = [];
+  if (x.error !== "peer_output_too_large") failures.push(`error=${x.error}`);
+  if (x.peer !== "cursor") failures.push(`peer=${x.peer}`);
+  if (!(typeof x.stdoutBytes === "number" && x.stdoutBytes > 0)) failures.push("stdoutBytes must be positive");
+  if (!(typeof x.stderrBytes === "number" && x.stderrBytes >= 0)) failures.push("stderrBytes must be non-negative");
+  for (const key of ["stdoutExcerpt", "stderrExcerpt"]) {
+    if (x[key] !== undefined && !(typeof x[key] === "string" && x[key].length <= 4096)) {
+      failures.push(`${key} must be a string of at most 4096 characters`);
+    }
+  }
+  if (Buffer.byteLength(s, "utf8") >= 20_000) failures.push(`response is ${Buffer.byteLength(s, "utf8")} bytes`);
+  if (Object.hasOwn(x, "output")) failures.push("response includes duplicate output");
+  if (failures.length > 0) throw new Error(failures.join("; "));
+});' \
+  && ok "Cursor oversized output response is bounded and machine-readable" \
+  || no "Cursor oversized output response is oversized or missing diagnostics"
+FAKE_AGENT_OUTPUT_BYTES=34000000 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"retryable"' \
+  && no "Cursor oversized output is retryable" || ok "Cursor oversized output is terminal"
+FAKE_AGENT_SELF_KILL=true cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"timedOut": true' \
+  && ok "Cursor timeout is reported as terminal" || no "Cursor timeout is not reported"
+FAKE_AGENT_SELF_KILL=true cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"retryable"' \
+  && no "Cursor timeout is retryable" || ok "Cursor timeout has no retry metadata"
+FAKE_AGENT_SELF_KILL=true FAKE_AGENT_MODEL_REJECT=true cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"timedOut": true' \
+  && ok "Cursor timeout outranks model rejection output" || no "Cursor model rejection hides a timeout"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='rate limit' cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"retryable"' \
+  && no "Cursor strict JSON failure is retryable" || ok "Cursor strict JSON failure is terminal"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='rate limit' cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"strictJsonFailure": true' \
+  && ok "Cursor strict JSON failure is identified" || no "Cursor strict JSON failure is not identified"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"error": "cursor_model_unavailable"' \
+  && ok "Cursor model rejection outranks strict JSON failure" || no "Cursor strict JSON failure hides model rejection"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"modelAlias": "grok"' \
+  && ok "Cursor strict model rejection reports its public alias" || no "Cursor strict model rejection lacks its alias"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"modelId": "cursor-grok-4.5-high"' \
+  && ok "Cursor strict model rejection reports its mapped ID" || no "Cursor strict model rejection lacks its mapped ID"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"modelListCommand": "agent --list-models"' \
+  && ok "Cursor strict model rejection reports model discovery" || no "Cursor strict model rejection lacks model discovery"
+FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"retryable"' \
+  && no "Cursor strict model rejection is retryable" || ok "Cursor strict model rejection is terminal"
+FAKE_AGENT_MODEL_REJECT=true cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"error": "cursor_model_unavailable"' \
+  && ok "Cursor model rejection has its own error" || no "Cursor model rejection error is wrong"
+FAKE_AGENT_MODEL_REJECT=true cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
+  | grep -q '"modelId": "cursor-grok-4.5-high"' \
+  && ok "Cursor model rejection reports alias mapping" || no "Cursor model rejection lacks mapping"
 
 # ---------------------------------------------------------- plan-mode hook
 group "plan-mode hook"

@@ -2,7 +2,9 @@
 
 The plugin behind [Peer Pressure](../../README.md).
 
-Cross-model consultation, plan review, and code review. The peer is always the agent CLI that is *not* running the skill. Claude Code uses Codex, and Codex uses Claude Code, so the second view comes from a different model.
+Cross-model consultation, plan review, and code review. By default, Claude Code
+uses Codex and Codex uses Claude Code, so the second view comes from a different
+model. The Cursor Agent CLI is available as an optional reviewer.
 
 ## Skills
 
@@ -15,6 +17,46 @@ Consultation makes one peer request, except for one identical retry after a runt
 Both review skills checkpoint every 3 rounds and use a host-native prompt for each decision. If more than 50% of a round's findings are out of scope, the skill stops for user direction before it continues.
 
 The runtime exposes consultation and review commands. Consultation is payload-only. Review backends do not receive a write-capable mode.
+
+## Optional Cursor reviewer
+
+Cursor is an optional reviewer override. It is not a plugin host and does not
+change the default Claude Code to Codex or Codex to Claude pairing. Request
+Cursor explicitly with a model alias:
+
+```text
+composer -> composer-2.5
+kimi -> kimi-k3-max
+glm -> glm-5.2-max
+```
+
+Install and authenticate the Cursor Agent CLI:
+
+```bash
+curl https://cursor.com/install -fsS | bash
+agent login
+```
+
+Supported build: `2026.08.04-aaa8809`.
+
+Restore: `agent install 2026.08.04-aaa8809`.
+
+Model diagnostics: `agent --list-models`.
+
+Do not use `agent update` to correct a build mismatch. The reviewer supports
+only the listed build until it is re-tested.
+
+Each round starts one Cursor CLI invocation, but a tool-using turn can make
+multiple provider calls. Ask mode and Cursor's sandbox enforce read-only
+behavior at the CLI level, not an OS read-only boundary. The direct child
+timeout is 600 seconds. A descendant retaining an output pipe can keep
+`spawnSync` blocked and delay cleanup.
+
+Payload-only Cursor work exposes only an empty temporary workspace.
+Repository-context work also grants Cursor read access to the repository. Cursor
+rules, skills, notes, transcripts, or MCP configuration in that repository can
+influence the session, so use repository context only with repositories whose
+Cursor configuration you trust.
 
 ## Layout
 

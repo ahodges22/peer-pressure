@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Hermetic Cursor Agent CLI fixture for tests/run-tests.sh.
+set -uo pipefail
+
+if [ "${1:-}" = "--fixture-id" ]; then
+  printf '%s\n' peer-pressure-test-agent
+  exit 0
+fi
+
+if [ "${1:-}" = "--version" ]; then
+  printf '%s\n' "${FAKE_AGENT_VERSION-2026.08.04-aaa8809}"
+  exit "${FAKE_AGENT_VERSION_RC:-0}"
+fi
+
+if [ "${1:-}" = "--help" ]; then
+  for flag in --print --output-format --mode --sandbox --trust --workspace --add-dir --model; do
+    case " ${FAKE_AGENT_HELP_OMIT:-} " in
+      *" $flag "*) continue ;;
+    esac
+    printf '  %s stub flag\n' "$flag"
+  done
+  if [ "${FAKE_AGENT_REMOVE_AFTER_HELP:-false}" = "true" ]; then rm -f "$0"; fi
+  exit 0
+fi
+
+if [ "${PEER_PRESSURE_TEST_AGENT:-}" != "peer-pressure-test-agent" ]; then
+  printf 'test fixture marker is required\n' >&2
+  exit 97
+fi
+
+workspace=""
+model=""
+previous=""
+for arg in "$@"; do
+  case "$previous" in
+    --workspace) workspace="$arg" ;;
+    --model) model="$arg" ;;
+  esac
+  previous="$arg"
+done
+
+if [ -n "${FAKE_AGENT_ARGLOG:-}" ]; then
+  {
+    printf 'marker=%s\n' "$PEER_PRESSURE_TEST_AGENT"
+    for arg in "$@"; do printf 'arg=%s\n' "$arg"; done
+  } >> "$FAKE_AGENT_ARGLOG"
+fi
+
+if [ -n "${FAKE_AGENT_WORKSPACE_LOG:-}" ]; then
+  entries=""
+  if [ -n "$workspace" ] && [ -d "$workspace" ]; then
+    entries="$(find "$workspace" -mindepth 1 -maxdepth 1 -print -quit)"
+  fi
+  {
+    printf 'workspace=%s\n' "$workspace"
+    printf 'entries=%s\n' "$entries"
+  } >> "$FAKE_AGENT_WORKSPACE_LOG"
+fi
+
+if [ -n "${FAKE_AGENT_INPUTLOG:-}" ]; then
+  cat > "$FAKE_AGENT_INPUTLOG"
+else
+  cat > /dev/null
+fi
+
+if [ "${FAKE_AGENT_WRITE_WORKSPACE:-false}" = "true" ] && [ -n "$workspace" ]; then
+  printf 'fixture workspace artifact\n' > "$workspace/fixture-artifact.txt"
+fi
+
+if [ "${FAKE_AGENT_MODEL_REJECT:-false}" = "true" ]; then
+  printf 'model not available: %s\n' "$model" >&2
+fi
+
+if [ -n "${FAKE_AGENT_SLEEP:-}" ]; then sleep "$FAKE_AGENT_SLEEP"; fi
+if [ "${FAKE_AGENT_SELF_KILL:-false}" = "true" ]; then kill -KILL "$$"; fi
+
+if [ "${FAKE_AGENT_MODEL_REJECT:-false}" = "true" ]; then
+  exit 1
+fi
+
+if [ -n "${FAKE_AGENT_OUTPUT_BYTES:-}" ]; then
+  head -c "$FAKE_AGENT_OUTPUT_BYTES" /dev/zero | tr '\0' x
+  exit "${FAKE_AGENT_RC:-0}"
+fi
+
+is_error="${FAKE_AGENT_IS_ERROR:-false}"
+status="${FAKE_AGENT_STATUS:-STATUS: APPROVED}"
+api_error_status="${FAKE_AGENT_API_ERROR_STATUS:-}"
+case "${FAKE_AGENT_OUTPUT_MODE:-json}" in
+  json)
+    if [ -n "$api_error_status" ]; then
+      printf '{"type":"result","subtype":"success","is_error":%s,"result":"%s\\n\\nfake-cursor reply body.","api_error_status":%s,"session_id":"stub"}\n' "$is_error" "$status" "$api_error_status"
+    else
+      printf '{"type":"result","subtype":"success","is_error":%s,"result":"%s\\n\\nfake-cursor reply body.","session_id":"stub"}\n' "$is_error" "$status"
+    fi
+    ;;
+  non-json) printf '%s\n' "${FAKE_AGENT_NON_JSON_OUTPUT:-not JSON}" ;;
+  prefixed-json) printf 'notice: {"result":"not accepted"}\n' ;;
+  missing-result) printf '{"type":"result","is_error":false,"session_id":"stub"}\n' ;;
+  empty-result) printf '{"type":"result","is_error":false,"result":"","session_id":"stub"}\n' ;;
+  *) printf 'unknown output mode\n' >&2; exit 98 ;;
+esac
+
+exit "${FAKE_AGENT_RC:-0}"
