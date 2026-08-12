@@ -592,6 +592,24 @@ grep -q -- '--tools' "$AL" && ok "reviewer tool set is constrained" || no "revie
 grep -q -- '--permission-mode bypassPermissions' "$AL" \
   && no "review path must never bypass permissions" || ok "review path does not bypass permissions"
 
+# ------------------------------------------------------ review status parsing
+group "review status parsing"
+node --input-type=module -e '
+const { parseStatus } = await import("'"$REPO_ROOT"'/plugins/adversarial-review/scripts/lib/agents/common.mjs");
+const valid = new Set(["APPROVED", "CHANGES_REQUIRED"]);
+if (parseStatus("\n \t\uFEFFSTATUS: APPROVED\nreview body", valid) !== "APPROVED") process.exit(1);
+' >/dev/null 2>&1 \
+  && ok "leading transport whitespace does not hide review status" \
+  || no "leading transport whitespace hides review status"
+
+node --input-type=module -e '
+const { parseStatus } = await import("'"$REPO_ROOT"'/plugins/adversarial-review/scripts/lib/agents/common.mjs");
+const valid = new Set(["APPROVED", "CHANGES_REQUIRED"]);
+if (parseStatus("review complete\nSTATUS: APPROVED", valid) !== null) process.exit(1);
+' >/dev/null 2>&1 \
+  && ok "prose before review status remains invalid" \
+  || no "review status parser searches through prose"
+
 # ------------------------------------------------- transient-failure retry flag
 group "transient failures are marked retryable"
 R=$(newrepo tr); cd "$R"

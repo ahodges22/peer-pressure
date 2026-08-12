@@ -66,7 +66,7 @@ export function detectVersion({ command, minVersion, notInstalledHints, tooOldHi
 }
 
 export function parseStatus(output, valid) {
-  const first = (output ?? "").split(/\r?\n/)[0] ?? "";
+  const first = (output ?? "").trimStart().split(/\r?\n/)[0] ?? "";
   const m = first.match(/^STATUS:\s+(\S+)/);
   return m && valid.has(m[1]) ? m[1] : null;
 }
