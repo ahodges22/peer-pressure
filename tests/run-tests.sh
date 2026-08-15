@@ -828,6 +828,23 @@ cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX"
 cursor_cli plan-review --peer cursor --model grok --context-file "$PLAN_CTX" --first \
   | grep -q '"status": "APPROVED"' \
   && ok "plan review accepts the grok Cursor alias" || no "plan review rejects grok"
+out=$(FAKE_AGENT_STATUS='I will inspect the plan first.STATUS: APPROVED' \
+  cursor_cli plan-review --peer cursor --model grok --context-file "$PLAN_CTX" --first)
+printf '%s' "$out" | node -e '
+let s = "";
+process.stdin.on("data", (d) => { s += d; }).on("end", () => {
+  const x = JSON.parse(s);
+  if (x.ok !== true || x.status !== "APPROVED" || !x.output.startsWith("STATUS: APPROVED")) {
+    process.exit(1);
+  }
+});' 2>/dev/null \
+  && ok "Cursor review ignores aggregated progress before one valid status" \
+  || no "Cursor progress text hides an otherwise valid review status"
+FAKE_AGENT_STATUS='STATUS: APPROVED\nSTATUS: CHANGES_REQUIRED' \
+  cursor_cli plan-review --peer cursor --model grok --context-file "$PLAN_CTX" --first \
+  | grep -q '"error": "missing_status_line"' \
+  && ok "Cursor review rejects conflicting status markers" \
+  || no "Cursor review accepts a conflicting status marker"
 cursor_cli code-review --peer cursor --model kimi --mode uncommitted --first \
   | grep -q '"status": "APPROVED"' \
   && ok "payload-only code review accepts the kimi Cursor alias" || no "code review rejects kimi"

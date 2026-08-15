@@ -38,6 +38,16 @@ function invocationFor(host) {
 
 const REVIEW_STATUSES = new Set(["APPROVED", "CHANGES_REQUIRED"]);
 
+// Cursor's JSON result aggregates intermediate narration with the final answer.
+// Recover one unambiguous review segment and reject absent or conflicting
+// markers before reaching the strict shared parser below.
+function normalizeCursorReviewOutput(output) {
+  const markers = [...(output ?? "").matchAll(
+    /\bSTATUS:\s+(APPROVED|CHANGES_REQUIRED)(?=\s|$)/g
+  )];
+  return markers.length === 1 ? output.slice(markers[0].index) : null;
+}
+
 function emit(obj, code = 0) {
   writeAllSync(1, JSON.stringify(obj, null, 2) + "\n");
   process.exit(code);
@@ -215,15 +225,19 @@ function runPeer({ promptName, promptSubs, payload, cwd, model, peerOverride }) 
 
 function runReview(options) {
   const result = runPeer(options);
-  const { output, peer } = result;
-  const status = parseStatus(output, REVIEW_STATUSES);
+  const { peer } = result;
+  const normalized = peer.id === "cursor"
+    ? normalizeCursorReviewOutput(result.output)
+    : result.output;
+  const output = normalized ?? result.output;
+  const status = normalized === null ? null : parseStatus(output, REVIEW_STATUSES);
   if (!status) {
     emit({
       ok: false, error: "missing_status_line", peer: peer.id, output,
       ...(result.cleanupError ? { cleanupError: result.cleanupError } : {})
     }, 4);
   }
-  return { ...result, status };
+  return { ...result, output, status };
 }
 
 function cmdDetect(peerOverride) {
