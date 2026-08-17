@@ -57,6 +57,7 @@ Cursor explicitly with a model alias:
 
 ```text
 composer -> composer-2.5
+grok -> cursor-grok-4.6-high
 kimi -> kimi-k3-max
 glm -> glm-5.2-max
 ```
@@ -68,20 +69,24 @@ curl https://cursor.com/install -fsS | bash
 agent login
 ```
 
-Supported build: `2026.08.04-aaa8809`.
+Minimum tested build: `2026.08.04-aaa8809`. Newer builds are accepted when
+they provide the required command flags.
 
-Restore: `agent install 2026.08.04-aaa8809`.
+Update an older build with `agent update`.
 
 Model diagnostics: `agent --list-models`.
-
-Do not use `agent update` to correct a build mismatch. The reviewer supports
-only the listed build until it is re-tested.
 
 Each round starts one Cursor CLI invocation, but a tool-using turn can make
 multiple provider calls. Ask mode and Cursor's sandbox enforce read-only
 behavior at the CLI level, not an OS read-only boundary. The direct child
 timeout is 600 seconds. A descendant retaining an output pipe can keep
 `spawnSync` blocked and delay cleanup.
+
+Cursor also writes project and session metadata under `~/.cursor/projects`,
+even when the review uses an empty temporary workspace. A host sandbox must
+grant the Cursor command write access to that path. Permission failures return
+`cursor_metadata_write_denied` with the required path instead of a generic peer
+failure.
 
 Payload-only Cursor work exposes only an empty temporary workspace.
 Repository-context work also grants Cursor read access to the repository. Cursor

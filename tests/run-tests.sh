@@ -146,6 +146,8 @@ do
     && printf '%s\n' "$allowed_commands" | grep -q "{invocation.review} $review_command --peer cursor --model <selected-alias>" \
     && grep -q 'composer.*grok.*kimi.*glm' "$skill" \
     && grep -q 'same `--peer cursor` and `--model <selected-alias>`.*rerun_same_command_once\|rerun_same_command_once.*same `--peer cursor` and `--model <selected-alias>`' "$skill" \
+    && grep -q 'cursor_metadata_write_denied' "$skill" \
+    && grep -q 'reviewConfinement.runtimeWrites' "$skill" \
     && grep -q 'Never fall back to Codex or Claude' "$skill" \
     && ok "$skill_name preserves the explicit Cursor reviewer contract" \
     || no "$skill_name Cursor reviewer contract is incomplete"
@@ -180,6 +182,15 @@ grep -q '`consult-peer`' "$ROOT_README" \
   && grep -q 'peer account.*quota' "$PLUGIN_README" \
   && ok "README documents consultation scope, confinement, and cost" \
   || no "README consultation contract is incomplete"
+
+grep -q 'Minimum tested build: `2026.08.04-aaa8809`' "$ROOT_README" \
+  && grep -q 'agent update' "$ROOT_README" \
+  && grep -q '~/.cursor/projects' "$ROOT_README" \
+  && grep -q 'cursor-grok-4.6-high' "$ROOT_README" \
+  && grep -q 'Minimum tested build: `2026.08.04-aaa8809`' "$PLUGIN_README" \
+  && grep -q '~/.cursor/projects' "$PLUGIN_README" \
+  && ok "README documents the compatible Cursor build and metadata contract" \
+  || no "README Cursor compatibility or metadata contract is stale"
 
 if grep -Eq '^## (Safety|Troubleshooting)$' "$ROOT_README" "$PLUGIN_README"; then
   no "removed README sections returned"
@@ -669,8 +680,9 @@ import path from "node:path";
 
 const modulePath = process.env.CURSOR_MODULE;
 const work = process.env.FAKE_AGENT_ROOT;
-const { agent, buildRunOptions, CURSOR_MODELS, SUPPORTED_CURSOR_VERSION } = await import(modulePath);
+const { agent, buildRunOptions, CURSOR_METADATA_DIR, CURSOR_MODELS, SUPPORTED_CURSOR_VERSION } = await import(modulePath);
 const requiredFlags = ["--print", "--output-format", "--mode", "--sandbox", "--trust", "--workspace", "--add-dir", "--model"];
+const hiddenRequiredFlags = ["--disable-project-configs", "--disable-auto-update"];
 const saved = { ...process.env };
 let result;
 const reset = () => {
@@ -686,26 +698,40 @@ const run = (values = {}, options = {}) => {
 };
 
 assert.equal(SUPPORTED_CURSOR_VERSION, "2026.08.04-aaa8809");
-assert.deepEqual(CURSOR_MODELS, { composer: "composer-2.5", grok: "cursor-grok-4.5-high", kimi: "kimi-k3-max", glm: "glm-5.2-max" });
+assert.equal(CURSOR_METADATA_DIR, path.join(os.homedir(), ".cursor", "projects"));
+assert.deepEqual(CURSOR_MODELS, { composer: "composer-2.5", grok: "cursor-grok-4.6-high", kimi: "kimi-k3-max", glm: "glm-5.2-max" });
 assert(Object.isFrozen(CURSOR_MODELS));
 assert.equal(agent.id, "cursor");
 assert.equal(agent.command, "agent");
 assert.equal(buildRunOptions({ workspace: "/tmp/cursor-test", input: "review input" }).timeout, 600_000);
-assert.equal(detect({ FAKE_AGENT_VERSION: SUPPORTED_CURSOR_VERSION }).ok, true);
-for (const version of ["2026.08.03-aaa8809", "2026.08.05-aaa8809", "2026.08.04-wrong", "2026.08.04"]) {
-  const result = detect({ FAKE_AGENT_VERSION: version });
-  assert.equal(result.reason, "unsupported_build");
-  assert.equal(result.version, version);
-  assert.equal(result.supportedVersion, SUPPORTED_CURSOR_VERSION);
-  assert.deepEqual(result.setupHints, ["agent install 2026.08.04-aaa8809"]);
+result = detect({ FAKE_AGENT_VERSION: SUPPORTED_CURSOR_VERSION });
+assert.equal(result.ok, true); assert.equal(result.versionCheck, "exact");
+for (const version of ["2026.08.05-aaa8809", "2026.08.04-wrong", "2026.08.04"]) {
+  result = detect({ FAKE_AGENT_VERSION: version });
+  assert.equal(result.ok, true); assert.equal(result.version, version);
+  assert.equal(result.versionCheck, "compatible");
 }
+result = detect({ FAKE_AGENT_VERSION: "2026.08.03-aaa8809" });
+assert.equal(result.reason, "too_old");
+assert.equal(result.version, "2026.08.03-aaa8809");
+assert.equal(result.minimum, SUPPORTED_CURSOR_VERSION);
+assert.deepEqual(result.setupHints, ["agent update"]);
 assert.equal(detect({ FAKE_AGENT_VERSION: "nightly" }).reason, "unsupported_version_format");
 assert.equal(detect({ FAKE_AGENT_VERSION: "" }).version, "");
 assert.equal(detect({ FAKE_AGENT_VERSION_RC: "1" }).reason, "authentication_failed");
 assert.deepEqual(detect({ FAKE_AGENT_HELP_OMIT: "--mode" }).missingFlags, ["--mode"]);
 assert.deepEqual(detect({ FAKE_AGENT_HELP_OMIT: requiredFlags.join(" ") }).missingFlags, requiredFlags);
+for (const flag of hiddenRequiredFlags) {
+  result = detect({ FAKE_AGENT_HELP_OMIT: flag });
+  assert.equal(result.reason, "unsupported_build"); assert.deepEqual(result.missingFlags, [flag]);
+}
+assert.equal(detect({ FAKE_AGENT_STATUS_RC: "1" }).reason, "authentication_failed");
+assert.deepEqual(agent.confinement().runtimeWrites, [CURSOR_METADATA_DIR]);
 const oldPath = process.env.PATH; process.env.PATH = "/no-such-agent-path";
-assert.equal(agent.detect().reason, "not_installed"); process.env.PATH = oldPath;
+result = agent.detect();
+assert.equal(result.reason, "not_installed");
+assert.deepEqual(result.setupHints, ["curl https://cursor.com/install -fsS | bash", "agent login"]);
+process.env.PATH = oldPath;
 
 result = run({ PATH: "/no-such-agent-path" });
 assert.equal(result.rc, -1);
@@ -762,9 +788,14 @@ for (const mode of ["non-json", "prefixed-json", "missing-result", "empty-result
 assert.equal(run({ FAKE_AGENT_RC: "9", FAKE_AGENT_OUTPUT_MODE: "non-json" }).rc, 9);
 result = run({ FAKE_AGENT_OUTPUT_BYTES: "34000000" }, { timeoutMs: 10_000 });
 assert.notEqual(result.rc, 0); assert.equal(result.outputTooLarge, true); assert.equal(result.timedOut, false);
+result = run({
+  FAKE_AGENT_RC: "1",
+  FAKE_AGENT_STDERR: `Error: EPERM: operation not permitted, mkdir '${CURSOR_METADATA_DIR}/fixture'`
+});
+assert.equal(result.metadataWriteDenied, true); assert.equal(result.metadataPath, CURSOR_METADATA_DIR);
 result = run({ FAKE_AGENT_MODEL_REJECT: "true" }, { model: "grok" });
 assert.equal(result.modelRejected, true); assert.equal(result.modelAlias, "grok");
-assert.equal(result.modelId, "cursor-grok-4.5-high"); assert.equal(result.modelListCommand, "agent --list-models");
+assert.equal(result.modelId, "cursor-grok-4.6-high"); assert.equal(result.modelListCommand, "agent --list-models");
 
 const rmSync = fs.rmSync; fs.rmSync = () => { throw new Error("cleanup denied"); };
 try {
@@ -825,6 +856,56 @@ env ADVERSARIAL_REVIEW_HOST=codex node "$CLI_JS" detect 2>&1 | grep -q '"peer": 
 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
   | grep -q '"peer": "cursor"' \
   && ok "consult accepts the composer Cursor alias" || no "consult rejects composer"
+out=$(FAKE_AGENT_STATUS='I will compare the options first.RECOMMENDATION: Use the database' \
+  cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX")
+printf '%s' "$out" | node -e '
+let s = "";
+process.stdin.on("data", (d) => { s += d; }).on("end", () => {
+  const x = JSON.parse(s);
+  if (x.ok !== true || !x.output.startsWith("RECOMMENDATION: Use the database")) process.exit(1);
+});' 2>/dev/null \
+  && ok "Cursor consultation ignores aggregated progress before one recommendation" \
+  || no "Cursor progress text hides an otherwise valid recommendation"
+FAKE_AGENT_STATUS='RECOMMENDATION: Use A\nRECOMMENDATION: Use B' \
+  cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"error": "missing_recommendation_line"' \
+  && ok "Cursor consultation rejects conflicting recommendations" \
+  || no "Cursor consultation accepts conflicting recommendations"
+FAKE_AGENT_STATUS='I will provide a recommendation: after inspection' \
+  cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+  | grep -q '"error": "missing_recommendation_line"' \
+  && ok "Cursor consultation does not treat narration as a recommendation" \
+  || no "Cursor consultation accepts narration as a recommendation"
+for invalid_recommendation in \
+  'I will now give my RECOMMENDATION: after inspection' \
+  'NONRECOMMENDATION: This is not a result label'
+do
+  FAKE_AGENT_STATUS="$invalid_recommendation" \
+    cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+    | grep -q '"error": "missing_recommendation_line"' \
+    || invalid_recommendation_accepted=true
+done
+[ "${invalid_recommendation_accepted:-false}" = "false" ] \
+  && ok "Cursor consultation requires a standalone uppercase result label" \
+  || no "Cursor consultation accepts an embedded uppercase recommendation"
+out=$(FAKE_AGENT_STATUS='RECOMMENDATION: Use B\nThe missing fact could change the recommendation: data size' \
+  cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX")
+printf '%s' "$out" | grep -q '"ok": true' \
+  && ok "Cursor consultation ignores lowercase recommendation prose in the body" \
+  || no "Cursor consultation rejects a valid recommendation because of body prose"
+cursor_variants_ok=true
+for recommendation in \
+  'Narration. RECOMMENDATION: Use the database' \
+  'Narration.\n  ## RECOMMENDATION: Use the database' \
+  'Narration.\n- **RECOMMENDATION:** Use the database'
+do
+  FAKE_AGENT_STATUS="$recommendation" \
+    cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
+    | grep -q '"ok": true' || cursor_variants_ok=false
+done
+[ "$cursor_variants_ok" = "true" ] \
+  && ok "Cursor consultation preserves supported standalone label formatting" \
+  || no "Cursor consultation rejects supported standalone label formatting"
 cursor_cli plan-review --peer cursor --model grok --context-file "$PLAN_CTX" --first \
   | grep -q '"status": "APPROVED"' \
   && ok "plan review accepts the grok Cursor alias" || no "plan review rejects grok"
@@ -859,7 +940,7 @@ cursor_cli code-review --peer cursor --model glm --mode uncommitted --repo-conte
 
 for alias_and_id in \
   'composer composer-2.5' \
-  'grok cursor-grok-4.5-high' \
+  'grok cursor-grok-4.6-high' \
   'kimi kimi-k3-max' \
   'glm glm-5.2-max'
 do
@@ -901,7 +982,7 @@ for failure in missing auth build version empty_version flag; do
   case "$failure" in
     missing) out=$(env PATH="$MISSING_AGENT_BIN:/usr/bin:/bin" PEER_PRESSURE_TEST_AGENT=peer-pressure-test-agent FAKE_CODEX_ARGLOG="$CODEX_ARGS" FAKE_CLAUDE_ARGLOG="$CLAUDE_ARGS" "$NODE_BIN" "$CLI_JS" detect --peer cursor 2>&1) ; expected='"error": "peer_unavailable"' ;;
     auth) out=$(FAKE_AGENT_VERSION_RC=1 cursor_cli detect --peer cursor) ; expected='"error": "authentication_failed"' ;;
-    build) out=$(FAKE_AGENT_VERSION=2026.08.03-aaa8809 cursor_cli detect --peer cursor) ; expected='"error": "unsupported_build"' ;;
+    build) out=$(FAKE_AGENT_VERSION=2026.08.03-aaa8809 cursor_cli detect --peer cursor) ; expected='"error": "peer_too_old"' ;;
     version) out=$(FAKE_AGENT_VERSION=nightly cursor_cli detect --peer cursor) ; expected='"error": "unsupported_version_format"' ;;
     empty_version) out=$(FAKE_AGENT_VERSION= cursor_cli detect --peer cursor) ; expected='"version": ""' ;;
     flag) out=$(FAKE_AGENT_HELP_OMIT=--mode cursor_cli detect --peer cursor) ; expected='"missingFlags"' ;;
@@ -911,6 +992,11 @@ for failure in missing auth build version empty_version flag; do
     && ok "Cursor $failure detection failure does not fall back" \
     || no "Cursor $failure detection failure has the wrong contract"
 done
+
+FAKE_AGENT_VERSION=2026.08.05-aaa8809 cursor_cli detect --peer cursor \
+  | grep -q '"versionCheck": "compatible"' \
+  && ok "newer capable Cursor builds pass detection" \
+  || no "newer capable Cursor build is rejected"
 
 SPAWN_ERROR_AGENT_BIN="$WORK/spawn-error-agent-bin"
 mkdir -p "$SPAWN_ERROR_AGENT_BIN"
@@ -932,6 +1018,19 @@ let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
   && [ ! -s "$CODEX_ARGS" ] && [ ! -s "$CLAUDE_ARGS" ] \
   && ok "Cursor spawn failure preserves diagnostics without default-peer fallback" \
   || no "Cursor spawn failure lost diagnostics or fell back"
+
+out=$(FAKE_AGENT_RC=1 \
+  FAKE_AGENT_STDERR="Error: EPERM: operation not permitted, mkdir '$HOME/.cursor/projects/fixture'" \
+  cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX")
+printf '%s' "$out" | node -e '
+let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+  const x=JSON.parse(s);
+  if (x.error !== "cursor_metadata_write_denied" || x.peer !== "cursor" ||
+      x.path !== process.env.HOME + "/.cursor/projects" || typeof x.hint !== "string" ||
+      Object.hasOwn(x, "retryable")) process.exit(1);
+});' 2>/dev/null \
+  && ok "Cursor metadata permission failure is actionable and terminal" \
+  || no "Cursor metadata permission failure is opaque or retryable"
 
 : > "$CURSOR_ARGS"; : > "$CURSOR_INPUT"; : > "$CURSOR_WORKSPACES"
 FAKE_AGENT_IS_ERROR=true FAKE_AGENT_API_ERROR_STATUS=529 cursor_cli consult --peer cursor --model composer --context-file "$QUESTION_CTX" \
@@ -992,7 +1091,7 @@ FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available'
   | grep -q '"modelAlias": "grok"' \
   && ok "Cursor strict model rejection reports its public alias" || no "Cursor strict model rejection lacks its alias"
 FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
-  | grep -q '"modelId": "cursor-grok-4.5-high"' \
+  | grep -q '"modelId": "cursor-grok-4.6-high"' \
   && ok "Cursor strict model rejection reports its mapped ID" || no "Cursor strict model rejection lacks its mapped ID"
 FAKE_AGENT_OUTPUT_MODE=non-json FAKE_AGENT_NON_JSON_OUTPUT='model not available' cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
   | grep -q '"modelListCommand": "agent --list-models"' \
@@ -1004,7 +1103,7 @@ FAKE_AGENT_MODEL_REJECT=true cursor_cli consult --peer cursor --model grok --con
   | grep -q '"error": "cursor_model_unavailable"' \
   && ok "Cursor model rejection has its own error" || no "Cursor model rejection error is wrong"
 FAKE_AGENT_MODEL_REJECT=true cursor_cli consult --peer cursor --model grok --context-file "$QUESTION_CTX" \
-  | grep -q '"modelId": "cursor-grok-4.5-high"' \
+  | grep -q '"modelId": "cursor-grok-4.6-high"' \
   && ok "Cursor model rejection reports alias mapping" || no "Cursor model rejection lacks mapping"
 
 # ---------------------------------------------------------- plan-mode hook

@@ -8,10 +8,11 @@ import { spawnSync } from "node:child_process";
 import { assertPayloadSize } from "./common.mjs";
 
 export const SUPPORTED_CURSOR_VERSION = "2026.08.04-aaa8809";
+export const CURSOR_METADATA_DIR = path.join(os.homedir(), ".cursor", "projects");
 
 export const CURSOR_MODELS = Object.freeze({
   composer: "composer-2.5",
-  grok: "cursor-grok-4.5-high",
+  grok: "cursor-grok-4.6-high",
   kimi: "kimi-k3-max",
   glm: "glm-5.2-max"
 });
@@ -20,8 +21,10 @@ const REQUIRED_FLAGS = [
   "--print", "--output-format", "--mode", "--sandbox",
   "--trust", "--workspace", "--add-dir", "--model"
 ];
+const COMMAND_ONLY_FLAGS = ["--disable-project-configs", "--disable-auto-update"];
 
-const VERSION_REMEDIATION = "agent install 2026.08.04-aaa8809";
+const VERSION_REMEDIATION = "agent update";
+const INSTALL_REMEDIATION = ["curl https://cursor.com/install -fsS | bash", "agent login"];
 const VERSION_PATTERN = /^(\d{4})\.(\d{2})\.(\d{2})(?:-([0-9A-Za-z.-]+))?$/;
 
 function hasFlag(help, flag) {
@@ -34,7 +37,23 @@ function probeFlags() {
   if (result.error || result.status !== 0) return { ok: false, missing: REQUIRED_FLAGS };
   const help = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   const missing = REQUIRED_FLAGS.filter((flag) => !hasFlag(help, flag));
-  return { ok: missing.length === 0, missing };
+  if (missing.length > 0) return { ok: false, missing };
+
+  // Cursor accepts security and update-control flags that it omits from help.
+  // `status` validates those options locally without starting a model request.
+  for (const flag of COMMAND_ONLY_FLAGS) {
+    const probe = spawnSync("agent", [flag, "status"], {
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024
+    });
+    if (probe.error) return { ok: false, missing: [flag] };
+    if (probe.status !== 0) {
+      const diagnostics = `${probe.stdout ?? ""}${probe.stderr ?? ""}`;
+      if (/unknown option/i.test(diagnostics)) return { ok: false, missing: [flag] };
+      return { ok: false, reason: "authentication_failed", missing: [] };
+    }
+  }
+  return { ok: true, missing: [] };
 }
 
 function versionFailure(reason, version) {
@@ -42,9 +61,25 @@ function versionFailure(reason, version) {
     ok: false,
     reason,
     version,
-    supportedVersion: SUPPORTED_CURSOR_VERSION,
+    minimum: SUPPORTED_CURSOR_VERSION,
     setupHints: [VERSION_REMEDIATION]
   };
+}
+
+function compareVersionDates(left, right) {
+  const leftMatch = VERSION_PATTERN.exec(left);
+  const rightMatch = VERSION_PATTERN.exec(right);
+  if (!leftMatch || !rightMatch) return null;
+  for (let i = 1; i <= 3; i++) {
+    const difference = Number(leftMatch[i]) - Number(rightMatch[i]);
+    if (difference !== 0) return Math.sign(difference);
+  }
+  return 0;
+}
+
+function deniedMetadataWrite(text) {
+  return /(?:EPERM|EACCES|permission denied|operation not permitted)/i.test(text) &&
+    (text.includes(CURSOR_METADATA_DIR) || /[\\/]\.cursor[\\/]projects(?:[\\/]|\b)/i.test(text));
 }
 
 function cleanup(workspace) {
@@ -82,7 +117,7 @@ export const agent = {
         ok: false,
         reason: "not_installed",
         detail: error instanceof Error ? error.message : String(error),
-        setupHints: [VERSION_REMEDIATION]
+        setupHints: INSTALL_REMEDIATION
       };
     }
     if (result.error) {
@@ -90,7 +125,7 @@ export const agent = {
         ok: false,
         reason: "not_installed",
         detail: result.error.message,
-        setupHints: [VERSION_REMEDIATION]
+        setupHints: INSTALL_REMEDIATION
       };
     }
     if (result.status !== 0) {
@@ -103,14 +138,18 @@ export const agent = {
 
     const version = (result.stdout ?? "").split(/\r?\n/, 1)[0].trim();
     if (!VERSION_PATTERN.test(version)) return versionFailure("unsupported_version_format", version);
-    if (version !== SUPPORTED_CURSOR_VERSION) return versionFailure("unsupported_build", version);
+    if (compareVersionDates(version, SUPPORTED_CURSOR_VERSION) < 0) return versionFailure("too_old", version);
 
     const flags = probeFlags();
     if (!flags.ok) {
+      if (flags.reason === "authentication_failed") {
+        return { ok: false, reason: flags.reason, setupHints: ["agent login"] };
+      }
       return {
         ok: false,
         reason: "unsupported_build",
         version,
+        minimum: SUPPORTED_CURSOR_VERSION,
         missingFlags: flags.missing,
         setupHints: [VERSION_REMEDIATION]
       };
@@ -118,7 +157,7 @@ export const agent = {
     return {
       ok: true,
       version,
-      versionCheck: "exact",
+      versionCheck: version === SUPPORTED_CURSOR_VERSION ? "exact" : "compatible",
       minimum: SUPPORTED_CURSOR_VERSION
     };
   },
@@ -127,9 +166,11 @@ export const agent = {
     return {
       sandbox: "ask-mode",
       osEnforced: false,
+      runtimeWrites: [CURSOR_METADATA_DIR],
       detail:
         "Cursor runs in ask mode with its CLI sandbox enabled, from a fresh temporary workspace. " +
-        "This is CLI-enforced, not an OS-enforced read-only boundary."
+        "This is CLI-enforced, not an OS-enforced read-only boundary. Cursor also persists project " +
+        `metadata under ${CURSOR_METADATA_DIR}, which requires host write permission.`
     };
   },
 
@@ -206,6 +247,9 @@ export const agent = {
 
       const modelRejected = rc !== 0 && Boolean(modelId) &&
         /\b(?:unknown model|model\b[^\n]*(?:not available|not found|unavailable))/i.test(`${stdout}\n${stderr}`);
+      const metadataWriteDenied = rc !== 0 && deniedMetadataWrite(
+        `${stdout}\n${stderr}\n${spawnError?.message ?? ""}`
+      );
       response = {
         rc,
         output,
@@ -216,6 +260,9 @@ export const agent = {
         ...(apiErrorStatus !== undefined ? { apiErrorStatus } : {}),
         ...(outputTooLarge ? { outputTooLarge: true } : {}),
         ...(spawnError ? { spawnError } : {}),
+        ...(metadataWriteDenied
+          ? { metadataWriteDenied: true, metadataPath: CURSOR_METADATA_DIR }
+          : {}),
         ...(modelRejected
           ? {
               modelRejected: true,

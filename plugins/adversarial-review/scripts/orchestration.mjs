@@ -48,6 +48,16 @@ function normalizeCursorReviewOutput(output) {
   return markers.length === 1 ? output.slice(markers[0].index) : null;
 }
 
+function normalizeCursorConsultOutput(output) {
+  const text = String(output ?? "");
+  const markers = [...text.matchAll(
+    /(^|[\r\n.!?])([ \t]*(?:(?:#{1,6}|[-+*])[ \t]+)?(?:\*\*|__|\*|_|`)?RECOMMENDATION(?:\*\*|__|\*|_|`)?\s*:\s*(?:\*\*|__|\*|_|`)?)/g
+  )];
+  return markers.length === 1
+    ? text.slice(markers[0].index + markers[0][1].length)
+    : null;
+}
+
 function emit(obj, code = 0) {
   writeAllSync(1, JSON.stringify(obj, null, 2) + "\n");
   process.exit(code);
@@ -174,6 +184,15 @@ function runPeer({ promptName, promptSubs, payload, cwd, model, peerOverride }) 
         ...(result.stdout ? { stdoutExcerpt: result.stdout.slice(-4096) } : {}),
         ...(result.stderr ? { stderrExcerpt: result.stderr.slice(-4096) } : {}),
         ...diagnostics
+      }, 3);
+    }
+    if (peer.id === "cursor" && result.metadataWriteDenied) {
+      emit({
+        ok: false, error: "cursor_metadata_write_denied", peer: peer.id, rc: result.rc,
+        path: result.metadataPath,
+        hint: "Cursor CLI writes project metadata outside the review workspace. Grant the command " +
+          "write access to this path with the host's native sandbox permission mechanism, then rerun it.",
+        stderr: result.stderr, stdout: result.stdout, output: result.output, ...diagnostics
       }, 3);
     }
     if (peer.id === "cursor" && result.timedOut) {
@@ -529,13 +548,18 @@ function cmdConsult(argv, peerOverride) {
     `===== ${label} START =====`, body, `===== ${label} END =====`
   ]).join("\n") + "\n";
 
-  const { output, peer, cleanupError } = runPeer({
+  const result = runPeer({
     promptName: "consult",
     payload,
     model: values.model,
     peerOverride
   });
-  if (!hasRecommendationLine(output)) {
+  const { peer, cleanupError } = result;
+  const normalized = peer.id === "cursor"
+    ? normalizeCursorConsultOutput(result.output)
+    : result.output;
+  const output = normalized ?? result.output;
+  if (normalized === null || !hasRecommendationLine(output)) {
     emit({
       ok: false, error: "missing_recommendation_line", peer: peer.id, output,
       ...(cleanupError ? { cleanupError } : {})

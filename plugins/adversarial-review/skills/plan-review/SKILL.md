@@ -90,6 +90,8 @@ When the user explicitly requests Cursor with `composer`, `grok`, `kimi`, or `gl
 3. Run `{invocation.review} plan-review --peer cursor --model <selected-alias> --context-file <path> --first` for the initial review and preserve those flags on subsequent iterations.
 4. Preserve `--peer cursor` and `--model <selected-alias>` on every review command and the one allowed retry.
 5. Stop on every explicit-Cursor detection or execution failure. Never fall back to Codex or Claude.
+6. Read `reviewConfinement.runtimeWrites` from preflight. Cursor persists metadata at each listed path. If the active execution tool exposes a native sandbox permission mechanism and normal execution cannot write those paths, use that mechanism for every Cursor review command. If host policy does not permit the write, stop.
+7. If execution returns `cursor_metadata_write_denied`, report its `path` and `hint`, then stop. Do not retry unless the permission changes.
 
 Do not use this branch for a request that does not explicitly name Cursor and one supported alias. The default workflow remains host-derived.
 
