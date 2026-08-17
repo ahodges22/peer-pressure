@@ -6,14 +6,14 @@
     "name": "Alex Hodges"
   },
   "metadata": {
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "plugins": [
     {
       "name": "adversarial-review",
       "source": "./plugins/adversarial-review",
       "description": "Cross-model consultation, plan review, and code review. By default, Claude Code uses Codex and Codex uses Claude Code. The Cursor Agent CLI is available as an optional reviewer.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": {
         "name": "Alex Hodges"
       },
